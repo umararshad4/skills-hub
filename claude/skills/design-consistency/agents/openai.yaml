@@ -1,0 +1,3 @@
+display_name: Design Consistency
+short_description: Preserve existing UI patterns and visual parity.
+default_prompt: Review or implement this UI change while preserving existing design consistency.

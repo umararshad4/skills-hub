@@ -1,0 +1,3 @@
+display_name: React Doctor
+short_description: Run React Doctor and prevent quality score regression.
+default_prompt: Run React Doctor for this React change, summarize the score and fix any regressions.

@@ -1,0 +1,3 @@
+display_name: Docs Maintainer
+short_description: Keep workflow, API, and setup docs accurate after changes.
+default_prompt: Check whether this change needs docs updates and keep any edits concise and accurate.

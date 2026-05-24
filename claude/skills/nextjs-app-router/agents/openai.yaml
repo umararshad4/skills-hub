@@ -1,0 +1,3 @@
+display_name: Next.js App Router
+short_description: Guide App Router boundaries, routes, caching, and data fetching.
+default_prompt: Review or implement this Next.js App Router change with correct server/client boundaries and targeted verification.

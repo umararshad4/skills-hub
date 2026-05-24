@@ -1,0 +1,79 @@
+{
+  "name": "MCT automation policy",
+  "version": "1.3.0",
+  "defaultMode": "balanced",
+  "mctAliases": ["MCT", "mct", "my claude toolkit", "use MCT"],
+  "todoQueue": {
+    "enabled": true,
+    "fileName": "TODO.md",
+    "whenMctRequested": "read-first",
+    "defaultExecution": "sequential",
+    "allowParallelWhenIndependent": true,
+    "updateCheckboxesAfterVerification": true,
+    "deleteCompletedItems": false,
+    "requireVerificationBeforeDone": true
+  },
+  "postTaskVerification": {
+    "enabled": true,
+    "uiPreferred": "playwright-mcp",
+    "chromeWhen": ["authenticated-profile", "extensions", "remote-profile-dependent-pages"],
+    "requireCheckOrSkippedCheckForDone": true
+  },
+  "todoCommits": {
+    "enabled": true,
+    "mode": "after-verified-task",
+    "command": "mct done --commit",
+    "requireCheckOrSkippedCheck": true,
+    "commitAllByDefault": false,
+    "messageStyle": "conventional-descriptive",
+    "includeReceiptInBody": true
+  },
+  "projectSignals": {
+    "react": ["package.json", "src", "app", "pages"],
+    "nextjs": ["next.config.js", "next.config.mjs", "next.config.ts", "app", "pages"],
+    "typescript": ["tsconfig.json"],
+    "tailwind": ["tailwind.config.js", "tailwind.config.ts", "postcss.config.js", "postcss.config.mjs"]
+  },
+  "changedSurfaceRules": [
+    {
+      "name": "react",
+      "patterns": ["*.jsx", "*.tsx"],
+      "skills": ["react-doctor", "code-review"],
+      "checks": ["react-doctor-diff"]
+    },
+    {
+      "name": "ui",
+      "patterns": ["*.css", "*.scss", "*.tsx", "tailwind.config.*"],
+      "skills": ["ui-system", "design-consistency"],
+      "checks": ["diff-review", "browser-check-if-layout-risk"]
+    },
+    {
+      "name": "typescript",
+      "patterns": ["*.ts", "*.tsx"],
+      "skills": ["frontend-architecture"],
+      "checks": ["typecheck-if-shared-or-risky"]
+    },
+    {
+      "name": "docs",
+      "patterns": ["*.md", "*.mdx"],
+      "skills": ["docs-maintainer"],
+      "checks": ["content-review"]
+    }
+  ],
+  "preCommit": {
+    "runSecretScan": true,
+    "runReactDoctorDiffWhenReactProject": true,
+    "runTypecheck": false
+  },
+  "prePush": {
+    "runReactDoctorDiffWhenReactProject": true,
+    "runTypecheckWhenScriptExists": true,
+    "runTestsWhenScriptExists": false,
+    "runBuild": false
+  },
+  "ci": {
+    "template": "templates/ci/github-actions/mct.yml",
+    "vendoredCliPath": ".github/mct/mct",
+    "workflowPath": ".github/workflows/mct.yml"
+  }
+}

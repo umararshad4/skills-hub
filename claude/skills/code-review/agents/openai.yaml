@@ -1,0 +1,3 @@
+display_name: Code Review
+short_description: Bug-first review for frontend and full-stack diffs.
+default_prompt: Review this diff for bugs, regressions, security, accessibility, performance, typing, and missing tests.

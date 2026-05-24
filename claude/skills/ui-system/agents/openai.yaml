@@ -1,0 +1,3 @@
+display_name: UI System
+short_description: Build consistent, accessible, responsive UI.
+default_prompt: Implement or review this UI change against the existing design system, accessibility, and responsive behavior.

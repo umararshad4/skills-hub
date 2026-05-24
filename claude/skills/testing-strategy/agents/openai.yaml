@@ -1,0 +1,3 @@
+display_name: Testing Strategy
+short_description: Choose right-sized checks and tests for each change.
+default_prompt: Choose the appropriate verification strategy for this change based on risk and changed surface.

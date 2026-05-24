@@ -1,0 +1,3 @@
+display_name: Frontend Architecture
+short_description: Enforce scalable React and Next.js structure.
+default_prompt: Review or plan this frontend change for architecture, ownership, typed boundaries, and maintainability.

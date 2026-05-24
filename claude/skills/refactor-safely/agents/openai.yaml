@@ -1,0 +1,3 @@
+display_name: Refactor Safely
+short_description: Refactor with behavior preservation and scoped changes.
+default_prompt: Refactor this safely with behavior preservation, staged edits, and targeted verification.

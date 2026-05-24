@@ -1,0 +1,3 @@
+display_name: React Quality
+short_description: Review React state, effects, rendering, and component quality.
+default_prompt: Check this React change for state, effects, rerenders, memoization, and component quality.

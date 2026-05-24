@@ -1,0 +1,3 @@
+display_name: TODO Orchestrator
+short_description: Route TODO.md items through safe sequential or parallel execution.
+default_prompt: Read TODO.md, classify tasks, choose safe sequential or parallel execution, and update completed items after verification.

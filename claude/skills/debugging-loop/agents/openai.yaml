@@ -1,0 +1,3 @@
+display_name: Debugging Loop
+short_description: Reproduce, isolate, patch, and verify bugs.
+default_prompt: Debug this failure using a reproduce-isolate-root-cause-patch-regression workflow.

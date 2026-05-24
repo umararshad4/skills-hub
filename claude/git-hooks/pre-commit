@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MCT_BIN="${MCT_BIN:-$HOME/.claude/bin/mct}"
+
+if [ ! -x "${MCT_BIN}" ]; then
+  echo "MCT pre-commit warning: ${MCT_BIN} not found, skipping MCT checks" >&2
+  exit 0
+fi
+
+"${MCT_BIN}" verify --mode pre-commit

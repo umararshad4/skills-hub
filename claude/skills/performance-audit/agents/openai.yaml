@@ -1,0 +1,3 @@
+display_name: Performance Audit
+short_description: Audit rendering, bundle, images, caching, and runtime choices.
+default_prompt: Audit this change for frontend performance risks and recommend targeted verification.

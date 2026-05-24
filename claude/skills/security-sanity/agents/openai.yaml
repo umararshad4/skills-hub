@@ -1,0 +1,3 @@
+display_name: Security Sanity
+short_description: Review auth, permissions, secrets, payments, and sensitive data.
+default_prompt: Review this change for security-sensitive mistakes and required verification.
