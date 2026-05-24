@@ -181,6 +181,7 @@ Use the deterministic CLI when available:
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "..."
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "..." --commit --all
 ~/.claude/bin/mct commit --task "<task-id-or-slug>" --all
+~/.claude/bin/mct self-update
 ~/.claude/bin/mct classify
 ~/.claude/bin/mct verify --mode pre-commit
 ~/.claude/bin/mct verify --mode pre-push
@@ -198,6 +199,14 @@ Project bootstrap:
 ```
 
 `--project` creates `.mct/state.json`, adds `.mct/` to `.gitignore`, creates a `TODO.md` template if missing, and installs Git hooks. `--ci` also installs a GitHub Actions workflow and vendored `mct` CLI copy under `.github/mct/`.
+
+Toolkit update:
+
+```bash
+~/.claude/bin/mct self-update
+```
+
+If the source repo is not in a standard location, set `MCT_SOURCE=/path/to/skills-hub`.
 
 ## Skill Decision Rules
 

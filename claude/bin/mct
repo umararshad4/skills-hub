@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 DEFAULT_POLICY = {
     "todoQueue": {
         "fileName": "TODO.md",
@@ -61,6 +61,24 @@ def find_root(start: Path) -> Path:
 def claude_root() -> Path:
     env = os.environ.get("MCT_HOME")
     return Path(env).expanduser() if env else Path.home() / ".claude"
+
+
+def source_root() -> Path | None:
+    env = os.environ.get("MCT_SOURCE")
+    candidates = []
+    if env:
+        candidates.append(Path(env).expanduser())
+    candidates.extend([
+        Path.cwd(),
+        Path.home() / "My_Tech_House" / "skills_hub",
+        Path.home() / "skills-hub",
+        Path.home() / "skills_hub",
+    ])
+    for candidate in candidates:
+        path = candidate.resolve()
+        if (path / "claude" / "install.sh").exists() and (path / ".git").exists():
+            return path
+    return None
 
 
 def load_policy() -> dict:
@@ -768,6 +786,34 @@ def command_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_self_update(args: argparse.Namespace) -> int:
+    root = source_root()
+    if not root:
+        raise SystemExit(
+            "Could not find the skills-hub source repo. Set MCT_SOURCE=/path/to/skills-hub, "
+            "or run updates from a cloned skills-hub repo with ./claude/update.sh."
+        )
+    if not args.no_pull:
+        proc = subprocess.run(["git", "pull", "--ff-only"], cwd=str(root))
+        if proc.returncode != 0:
+            return proc.returncode
+    installer = root / "claude" / "install.sh"
+    proc = subprocess.run([str(installer)], cwd=str(root))
+    if proc.returncode != 0:
+        return proc.returncode
+    print(json.dumps({
+        "ok": True,
+        "source": str(root),
+        "installedTo": str(claude_root()),
+        "nextSteps": [
+            "Restart Claude Code sessions for fresh hook context.",
+            "Run ~/.claude/bin/mct init --project in projects that use MCT hooks.",
+            "Run ~/.claude/bin/mct init --project --ci in projects with vendored MCT CI."
+        ]
+    }, indent=2))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="mct", description="My Claude Toolkit orchestration CLI")
     parser.add_argument("--version", action="version", version=VERSION)
@@ -824,6 +870,10 @@ def main() -> int:
     commit.add_argument("--all", action="store_true", help="Stage all changes before committing")
     commit.add_argument("--message")
     commit.set_defaults(func=command_commit)
+
+    self_update = sub.add_parser("self-update")
+    self_update.add_argument("--no-pull", action="store_true", help="Install from local source without pulling")
+    self_update.set_defaults(func=command_self_update)
 
     args = parser.parse_args()
     return args.func(args)

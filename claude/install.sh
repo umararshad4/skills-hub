@@ -15,6 +15,8 @@ copy_dir() {
 cp "${ROOT_DIR}/CLAUDE.md" "${TARGET_DIR}/CLAUDE.md"
 cp "${ROOT_DIR}/MCT.md" "${TARGET_DIR}/MCT.md"
 cp "${ROOT_DIR}/settings.json" "${TARGET_DIR}/settings.json"
+cp "${ROOT_DIR}/install.sh" "${TARGET_DIR}/install.sh"
+cp "${ROOT_DIR}/update.sh" "${TARGET_DIR}/update.sh"
 
 copy_dir "skills"
 copy_dir "agents"
@@ -29,6 +31,7 @@ copy_dir "templates"
 find "${TARGET_DIR}/hooks/scripts" -type f -name "*.py" -exec chmod +x {} \;
 find "${TARGET_DIR}/bin" -type f -exec chmod +x {} \;
 find "${TARGET_DIR}/git-hooks" -type f -exec chmod +x {} \;
+chmod +x "${TARGET_DIR}/install.sh" "${TARGET_DIR}/update.sh"
 
 echo "Installed Claude engineering toolkit to ${TARGET_DIR}"
 echo "Restart Claude Code sessions for SessionStart hooks to load fresh context."

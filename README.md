@@ -24,6 +24,38 @@ This syncs the toolkit into `~/.claude`.
 
 Restart Claude Code after installing so session-start hooks load the fresh context.
 
+## Update
+
+From a cloned `skills-hub` repo:
+
+```bash
+./claude/update.sh
+```
+
+Or from anywhere after installation:
+
+```bash
+~/.claude/bin/mct self-update
+```
+
+If your clone lives somewhere unusual:
+
+```bash
+MCT_SOURCE=/path/to/skills-hub ~/.claude/bin/mct self-update
+```
+
+After updating the global toolkit, refresh project automation in each project that uses MCT hooks:
+
+```bash
+~/.claude/bin/mct init --project
+```
+
+For projects using vendored CI:
+
+```bash
+~/.claude/bin/mct init --project --ci
+```
+
 ## Project Bootstrap
 
 Inside any project:
