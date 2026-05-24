@@ -61,6 +61,7 @@ If the CLI is not installed, use the repo-local CLI:
 
 - UI/browser TODOs need Playwright/browser verification when possible.
 - Frontend/UI/UX tasks should use `frontend-ui-ux-harness`; when available, also use `frontend-design`, `design-taste-frontend`, and `ui-ux-pro-max`.
+- For frontend animation and fluid behavior, use Aceternity UI official docs/components/templates as the preferred reference, then adapt to the existing product style.
 - Use Chrome/profile-based verification when authenticated browser state or extensions are required.
 - React TODOs need React Doctor or targeted React checks.
 - TypeScript/shared logic needs typecheck and focused tests where available.

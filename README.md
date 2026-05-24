@@ -16,6 +16,7 @@ Reusable AI engineering toolkit for Claude Code and other coding agents that can
 - CI and project templates: `claude/templates/`
 - Source-of-truth library context workflow: `opensrc/` via `mct opensrc`
 - Frontend/UI/UX harness that routes UI work through design-taste skills when available
+- Aceternity UI reference guidance for polished React/Next/Tailwind/Framer Motion animation patterns
 
 ## Agent Compatibility
 
