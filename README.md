@@ -1,9 +1,10 @@
 # Skills Hub
 
-Reusable AI engineering toolkit for Claude Code workflows.
+Reusable AI engineering toolkit for Claude Code and other coding agents that can read repo instructions such as `AGENTS.md`.
 
 ## What Is Included
 
+- Cross-agent instructions: `AGENTS.md`
 - Global Claude guide: `claude/CLAUDE.md`
 - MCT orchestration guide: `claude/MCT.md`
 - Skills: `claude/skills/`
@@ -14,7 +15,28 @@ Reusable AI engineering toolkit for Claude Code workflows.
 - Deterministic MCT CLI: `claude/bin/mct`
 - CI and project templates: `claude/templates/`
 
+## Agent Compatibility
+
+This toolkit is Claude Code-first, but it is structured so other agents can use it too.
+
+| Agent type | How to use |
+| --- | --- |
+| Claude Code | Install with `./claude/install.sh`; Claude reads `~/.claude/` skills, agents, commands, settings, and hooks. |
+| Codex/OpenAI-style agents | Read root `AGENTS.md`, then follow `claude/MCT.md` and relevant files under `claude/skills/`. |
+| Cursor/other repo-aware agents | Point the agent at `AGENTS.md` and ask it to use MCT. |
+| Generic terminal agents | Use `./claude/bin/mct` directly and read `claude/MCT.md` as the workflow guide. |
+
+Most non-Claude tools do not support Claude's skills/subagents/hooks natively. For them:
+
+- Treat `claude/skills/*/SKILL.md` as reusable instruction packs.
+- Treat `claude/agents/*.md` as role prompts.
+- Treat `claude/commands/*.md` as workflow prompts.
+- Use `claude/bin/mct` as the deterministic orchestration CLI.
+- Use `claude/git-hooks/` for platform-independent Git lifecycle automation.
+
 ## Install
+
+Claude Code global install:
 
 ```bash
 ./claude/install.sh
@@ -23,6 +45,12 @@ Reusable AI engineering toolkit for Claude Code workflows.
 This syncs the toolkit into `~/.claude`.
 
 Restart Claude Code after installing so session-start hooks load the fresh context.
+
+Non-Claude agents do not need the global Claude install. They can read `AGENTS.md` and run:
+
+```bash
+./claude/bin/mct status --md
+```
 
 ## Update
 
@@ -80,6 +108,14 @@ With GitHub Actions CI:
 ~/.claude/bin/mct verify --mode pre-push
 ```
 
+Repo-local form for non-Claude agents:
+
+```bash
+./claude/bin/mct status --md
+./claude/bin/mct next --claim
+./claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
+```
+
 ## TODO.md Workflow
 
 When a project has a root `TODO.md`, MCT treats it as the task queue.
@@ -93,3 +129,22 @@ Example:
 ```
 
 MCT will classify tasks, choose sequential or safe parallel execution, require verification before completion, check off completed tasks, and optionally create descriptive commits.
+
+## Using MCT From Any Agent
+
+Prompt:
+
+```txt
+Use MCT. Read AGENTS.md and claude/MCT.md first. Work through TODO.md one verified task at a time.
+```
+
+Expected behavior:
+
+1. Read `AGENTS.md`.
+2. Read `claude/MCT.md`.
+3. Run `mct status --md`.
+4. Run `mct next --claim`.
+5. Complete the selected TODO task.
+6. Run verification.
+7. Run `mct done "<task>" --check "<check>" --commit --all`.
+8. Continue to the next task or report blockers.
