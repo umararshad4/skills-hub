@@ -110,6 +110,7 @@ With GitHub Actions CI:
 ~/.claude/bin/mct audit --warn-only
 ~/.claude/bin/mct next --claim
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
+~/.claude/bin/mct done "<ui-task>" --check "playwright-browser-check" --browser-evidence "tool=playwright-mcp | url=http://localhost:3000 | viewport=1440x900,390x844 | result=pass" --commit --all
 ~/.claude/bin/mct verify --mode pre-commit
 ~/.claude/bin/mct verify --mode pre-push
 ```
@@ -122,6 +123,7 @@ Repo-local form for non-Claude agents:
 ./claude/bin/mct audit --warn-only
 ./claude/bin/mct next --claim
 ./claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
+./claude/bin/mct done "<ui-task>" --check "playwright-browser-check" --browser-evidence "tool=playwright-mcp | url=http://localhost:3000 | viewport=1440x900,390x844 | result=pass" --commit --all
 ```
 
 ## TODO.md Workflow
@@ -137,6 +139,8 @@ Example:
 ```
 
 MCT will classify tasks, choose sequential or safe parallel execution, require verification before completion, check off completed tasks, and optionally create descriptive commits.
+
+UI/browser TODOs are strict. A check name alone is not enough. `mct done` requires Playwright/Chrome/browser evidence with a target URL, viewport or tested flow, and pass result, or an explicit skipped-check reason with the blocker.
 
 ## opensrc Workflow
 

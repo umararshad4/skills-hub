@@ -1,6 +1,6 @@
 {
   "name": "MCT automation policy",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "defaultMode": "balanced",
   "mctAliases": ["MCT", "mct", "my claude toolkit", "use MCT"],
   "todoQueue": {
@@ -17,7 +17,9 @@
     "enabled": true,
     "uiPreferred": "playwright-mcp",
     "chromeWhen": ["authenticated-profile", "extensions", "remote-profile-dependent-pages"],
-    "requireCheckOrSkippedCheckForDone": true
+    "requireCheckOrSkippedCheckForDone": true,
+    "requireBrowserEvidenceForUiTodos": true,
+    "browserEvidenceMinimum": ["tool", "url-or-test-or-screenshot-or-command", "viewport-or-flow", "result=pass"]
   },
   "todoCommits": {
     "enabled": true,

@@ -14,9 +14,10 @@ Use MCT TODO orchestration for the current project.
    - Chrome MCP for real-profile auth/session/extension/remote browser validation.
    - React Doctor/typecheck/targeted tests for non-browser code as appropriate.
 6. Update completed checkboxes only after verification.
-7. Run `~/.claude/bin/mct done "<task-id-or-slug>" --check "<check>" --commit --all` after verification when working through the TODO queue.
-8. If verification cannot run, use `--skipped-check "<reason>"` and explain the risk.
-9. Report completed, open, blocked, checks, commits, and risks.
+7. For UI/browser TODOs, record evidence with `--browser-evidence "tool=playwright-mcp | url=<target> | viewport=<sizes> | flow=<what passed> | result=pass"`.
+8. Run `~/.claude/bin/mct done "<task-id-or-slug>" --check "<check>" --commit --all` after verification when working through the TODO queue.
+9. If verification cannot run, use `--skipped-check "<reason>"` and explain the risk.
+10. Report completed, open, blocked, checks, commits, and risks.
 
 Focus, if provided:
 

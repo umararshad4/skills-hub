@@ -27,6 +27,8 @@ If one is unavailable, continue with this harness plus `ui-system` and `design-c
 6. Make responsive, keyboard, hover/focus, loading, empty, and error states explicit when relevant.
 7. Use existing component libraries and icons before creating new primitives.
 8. Run Playwright/browser verification for meaningful UI changes when possible.
+   - Capture the target URL, viewport sizes, flow/assertion, screenshot path if available, and pass/fail result.
+   - When completing a TODO, pass that evidence to `mct done --browser-evidence`.
 9. Run React Doctor if React files changed.
 
 ## Animation Reference
@@ -58,4 +60,5 @@ Rules:
 - Do not redesign when asked for a small fix.
 - Do not add heavy Aceternity-style effects just because they look impressive; they must serve the surface.
 - Do not skip browser/responsive verification for meaningful UI tasks unless impossible; record skipped-check reason.
+- Do not mark a UI TODO done with only `--check "playwright-browser-check"`; include evidence or the harness should fail.
 - Do not ask the user for routine design choices when the existing product style gives enough signal.

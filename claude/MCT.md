@@ -118,10 +118,20 @@ Record the check in `mct done`:
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "react-doctor-diff"
 ```
 
+For UI/browser TODOs, `--check` is not enough. Record concrete evidence:
+
+```bash
+~/.claude/bin/mct done "<task-id-or-slug>" \
+  --check "playwright-browser-check" \
+  --browser-evidence "tool=playwright-mcp | url=http://localhost:3000/pricing | viewport=1440x900,390x844 | flow=pricing toggle and CTA visible | result=pass"
+```
+
+Evidence must include the tool used, a target URL/test/screenshot/command, the viewport or tested flow, and `result=pass`. If browser verification cannot run, use `--skipped-check` with the concrete blocker instead of a vague check label.
+
 If the task should be committed immediately after verification, use:
 
 ```bash
-~/.claude/bin/mct done "<task-id-or-slug>" --check "playwright-browser-check" --commit --all
+~/.claude/bin/mct done "<task-id-or-slug>" --check "playwright-browser-check" --browser-evidence "tool=playwright-mcp | url=http://localhost:3000/pricing | viewport=1440x900,390x844 | result=pass" --commit --all
 ```
 
 This checks off the TODO item, writes a receipt, stages changes when `--all` is used, and creates a descriptive commit. Without `--all`, it only commits already staged files.

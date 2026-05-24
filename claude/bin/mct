@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 DEFAULT_POLICY = {
     "todoQueue": {
         "fileName": "TODO.md",
@@ -396,6 +396,65 @@ def recommend_checks(root: Path, surfaces: dict) -> list[str]:
     return list(dict.fromkeys(checks))
 
 
+def is_ui_task(task: TodoTask) -> bool:
+    signals = {"ui", "ux", "frontend", "react", "style", "layout", "responsive", "animation", "component", "visual"}
+    lower_text = task.text.lower()
+    lower_files = [file.lower() for file in task.files]
+    if any(tag.lower() in signals for tag in task.tags):
+        return True
+    if any(signal in lower_text for signal in signals):
+        return True
+    return any(
+        file.endswith((".tsx", ".jsx", ".css", ".scss", ".sass", ".mdx"))
+        or "tailwind.config" in file
+        or "/app/" in file
+        or "/components/" in file
+        for file in lower_files
+    )
+
+
+def browser_check_names(checks: list[str] | None) -> list[str]:
+    return [
+        check for check in (checks or [])
+        if re.search(r"(playwright|chrome|browser|screenshot|responsive|visual)", check, re.IGNORECASE)
+    ]
+
+
+def parse_browser_evidence(items: list[str] | None) -> list[dict]:
+    evidence = []
+    for item in items or []:
+        parts = [part.strip() for part in re.split(r"\s*\|\s*", item) if part.strip()]
+        entry = {"raw": item}
+        for part in parts:
+            if "=" in part:
+                key, value = part.split("=", 1)
+                entry[key.strip().lower()] = value.strip()
+        evidence.append(entry)
+    return evidence
+
+
+def valid_browser_evidence(items: list[str] | None) -> tuple[bool, str]:
+    parsed = parse_browser_evidence(items)
+    if not parsed:
+        return False, "missing --browser-evidence"
+    for item in parsed:
+        raw = item.get("raw", "").strip()
+        result = item.get("result", "").lower()
+        target = item.get("url") or item.get("file") or item.get("screenshot") or item.get("test") or item.get("command")
+        covered_flow = item.get("viewport") or item.get("flow") or item.get("assertion") or item.get("page")
+        if len(raw) < 12:
+            return False, "browser evidence is too vague"
+        if not result:
+            return False, "browser evidence must include result=pass"
+        if result not in {"pass", "passed", "ok", "success"}:
+            return False, f"browser evidence did not pass: {raw}"
+        if not target and not re.search(r"(https?://|localhost|127\.0\.0\.1|file=|screenshot=|test=|command=)", raw, re.IGNORECASE):
+            return False, f"browser evidence lacks a target: {raw}"
+        if not covered_flow:
+            return False, f"browser evidence lacks viewport, flow, assertion, or page: {raw}"
+    return True, ""
+
+
 def task_plan(tasks: list[TodoTask]) -> dict:
     deps = dependency_analysis(tasks)
     completed_ids = {task.id for task in tasks if task.done}
@@ -560,8 +619,15 @@ def append_receipt(root: Path, receipt: dict) -> Path:
     path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     state = load_state(root)
     state.setdefault("runs", []).append({"at": receipt["at"], "receipt": str(path.relative_to(root)), "summary": receipt.get("summary", ""), "completedTasks": receipt.get("completedTasks", [])})
-    if receipt.get("checksRun") or receipt.get("risks"):
-        state.setdefault("checkHistory", []).append({"at": receipt["at"], "summary": receipt.get("summary", ""), "checksRun": receipt.get("checksRun", []), "risks": receipt.get("risks", [])})
+    if receipt.get("checksRun") or receipt.get("checksSkipped") or receipt.get("browserEvidence") or receipt.get("risks"):
+        state.setdefault("checkHistory", []).append({
+            "at": receipt["at"],
+            "summary": receipt.get("summary", ""),
+            "checksRun": receipt.get("checksRun", []),
+            "checksSkipped": receipt.get("checksSkipped", []),
+            "browserEvidence": receipt.get("browserEvidence", []),
+            "risks": receipt.get("risks", []),
+        })
     save_state(root, state)
     return path
 
@@ -574,6 +640,7 @@ def command_receipt(args: argparse.Namespace) -> int:
         "completedTasks": args.completed_task or [],
         "checksRun": args.check or [],
         "checksSkipped": args.skipped_check or [],
+        "browserEvidence": parse_browser_evidence(args.browser_evidence),
         "risks": args.risk or [],
         "changedFiles": git_files(root),
         "stagedFiles": git_files(root, staged=True),
@@ -603,11 +670,31 @@ def command_done(args: argparse.Namespace) -> int:
     task = resolve_task(tasks, args.task)
     if not task:
         raise SystemExit(f"Could not resolve task: {args.task}")
+    browser_checks = browser_check_names(args.check)
+    browser_evidence_ok, browser_evidence_reason = valid_browser_evidence(args.browser_evidence)
+    if is_ui_task(task) and not args.skipped_check:
+        if not browser_checks:
+            raise SystemExit(
+                "UI/browser TODOs require a Playwright/Chrome/browser check before completion. "
+                "Run browser verification and pass --check plus --browser-evidence, or pass --skipped-check with a concrete blocker."
+            )
+        if not browser_evidence_ok:
+            raise SystemExit(
+                "UI/browser TODOs require evidence-grade browser verification before completion: "
+                f"{browser_evidence_reason}. Example: --browser-evidence "
+                "'tool=playwright-mcp | url=http://localhost:3000/pricing | viewport=1440x900,390x844 | result=pass'"
+            )
     if not task.done:
         update_todo_checkbox(todo_path, task.line)
     state = load_state(root)
     state.setdefault("tasks", {}).setdefault(task.id, {})
-    state["tasks"][task.id].update({"status": "done", "completedAt": now(), "text": task.clean_text, "checks": args.check or []})
+    state["tasks"][task.id].update({
+        "status": "done",
+        "completedAt": now(),
+        "text": task.clean_text,
+        "checks": args.check or [],
+        "browserEvidence": parse_browser_evidence(args.browser_evidence),
+    })
     save_state(root, state)
     receipt = {
         "at": now(),
@@ -615,6 +702,7 @@ def command_done(args: argparse.Namespace) -> int:
         "completedTasks": [task.id],
         "checksRun": args.check or [],
         "checksSkipped": args.skipped_check or [],
+        "browserEvidence": parse_browser_evidence(args.browser_evidence),
         "risks": args.risk or [],
         "changedFiles": git_files(root),
         "stagedFiles": git_files(root, staged=True),
@@ -854,15 +942,39 @@ def command_audit(args: argparse.Namespace) -> int:
         })
 
     recent_check_names = []
+    recent_browser_evidence = []
+    recent_skipped_checks = []
     for item in checks[-5:]:
         recent_check_names.extend(item.get("checksRun", []))
+        recent_browser_evidence.extend(item.get("browserEvidence", []))
+        recent_skipped_checks.extend(item.get("checksSkipped", []))
     if ("react" in data["surfaces"] or "ui" in data["surfaces"]) and recent_check_names:
-        browser_checked = any("playwright" in check or "chrome" in check or "browser" in check for check in recent_check_names)
+        browser_checked = bool(browser_check_names(recent_check_names))
         if not browser_checked:
             issues.append({
                 "severity": "medium",
                 "code": "browser-check-not-recorded",
                 "message": "React/UI files changed and checks exist, but no Playwright/Chrome/browser verification was recorded.",
+            })
+        elif not recent_browser_evidence:
+            issues.append({
+                "severity": "high",
+                "code": "browser-evidence-missing",
+                "message": "A browser-style check was recorded for React/UI changes, but no evidence was recorded. Include URL, viewport, command/test, screenshot, and pass result via --browser-evidence.",
+            })
+        elif not valid_browser_evidence([item.get("raw", "") for item in recent_browser_evidence])[0]:
+            issues.append({
+                "severity": "high",
+                "code": "browser-evidence-too-weak",
+                "message": "Browser evidence exists but is too vague or did not pass. Record concrete Playwright/Chrome evidence with target, viewport/test/screenshot, and result=pass.",
+            })
+    elif ("react" in data["surfaces"] or "ui" in data["surfaces"]) and recent_skipped_checks:
+        explicit_browser_skip = any(re.search(r"(playwright|chrome|browser)", check, re.IGNORECASE) for check in recent_skipped_checks)
+        if not explicit_browser_skip:
+            issues.append({
+                "severity": "medium",
+                "code": "browser-skip-not-explicit",
+                "message": "React/UI files changed and checks were skipped, but no explicit Playwright/Chrome/browser skipped-check reason was recorded.",
             })
 
     result = {
@@ -872,7 +984,7 @@ def command_audit(args: argparse.Namespace) -> int:
         "requiredBeforeFinal": [
             "opensrc initialized when package.json exists",
             "TODO items checked off with mct done only after verification",
-            "Playwright/Chrome/browser check recorded for UI tasks when possible",
+            "Playwright/Chrome/browser check recorded for UI tasks with URL/viewport/test/screenshot evidence when possible",
             "checks/skipped-checks/risks included in final response",
         ],
     }
@@ -1074,6 +1186,11 @@ def main() -> int:
     receipt.add_argument("--completed-task", action="append")
     receipt.add_argument("--check", action="append")
     receipt.add_argument("--skipped-check", action="append")
+    receipt.add_argument(
+        "--browser-evidence",
+        action="append",
+        help="Evidence for UI/browser verification, e.g. tool=playwright-mcp | url=http://localhost:3000 | viewport=1440x900,390x844 | result=pass",
+    )
     receipt.add_argument("--risk", action="append")
     receipt.set_defaults(func=command_receipt)
 
@@ -1082,6 +1199,11 @@ def main() -> int:
     done.add_argument("--summary", default="")
     done.add_argument("--check", action="append")
     done.add_argument("--skipped-check", action="append")
+    done.add_argument(
+        "--browser-evidence",
+        action="append",
+        help="Required for UI/browser TODOs unless skipped. Include tool, target URL/test/screenshot, viewport, and result=pass.",
+    )
     done.add_argument("--risk", action="append")
     done.add_argument("--commit", action="store_true")
     done.add_argument("--all", action="store_true", help="Stage all changes before committing")

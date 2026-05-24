@@ -23,6 +23,9 @@ Then check manually:
 - After each completed TODO, was `mct done` used to check it off?
 - Did each completed TODO record `--check` or `--skipped-check`?
 - For UI/browser tasks, was Playwright MCP or Chrome MCP verification run when possible?
+- For UI/browser tasks, did the receipt include evidence, not only a check label?
+  - Required evidence: tool, target URL/test/screenshot/command, viewport or flow, and `result=pass`.
+  - Invalid evidence: "checked UI", "browser ok", or only `--check "playwright-browser-check"`.
 - For React tasks, was React Doctor or an explicit skipped-check reason recorded?
 - Was a descriptive commit created for each verified TODO item when working through the TODO queue?
 - Did the final response include completed/open/blocked TODOs, checks, skipped checks, commits, and risks?
@@ -35,4 +38,4 @@ Ask only when the wrong choice would be expensive, destructive, or product-defin
 
 ## If Something Was Missed
 
-Fix it before final response when possible. If it cannot be fixed, record it as a skipped check or risk with the concrete reason.
+Fix it before final response when possible. If browser verification was missed for UI work, run it before finishing; do not rely on the final audit text as a substitute. If it cannot be fixed, record it as a skipped check or risk with the concrete reason.
