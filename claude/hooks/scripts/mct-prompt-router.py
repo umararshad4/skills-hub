@@ -53,6 +53,28 @@ def todo_context(todo_path: Path | None) -> str:
     )
 
 
+def opensrc_context(start: Path) -> str:
+    root = start.resolve()
+    for path in [root, *root.parents]:
+        package_json = path / "package.json"
+        if package_json.exists():
+            manifest = path / "opensrc" / "manifest.json"
+            if manifest.exists():
+                return (
+                    "\n\n## opensrc Status\n\n"
+                    f"Found package.json at `{package_json}` and opensrc manifest at `{manifest}`. "
+                    "Read opensrc/manifest.json and relevant opensrc/packages/*.md before planning."
+                )
+            return (
+                "\n\n## opensrc Status\n\n"
+                f"Found package.json at `{package_json}` but no `opensrc/manifest.json`. "
+                "First run `mct opensrc --fetch-metadata`, then fill relevant package context from official source-of-truth docs before normal MCT task execution."
+            )
+        if (path / ".git").exists():
+            break
+    return "\n\n## opensrc Status\n\nNo package.json found from the current working directory."
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -75,8 +97,9 @@ def main() -> int:
     else:
         mct = "MCT requested: inspect repo, classify task, route to correct skills/subagents/checks, and finish with a completion receipt."
 
-    todo = find_todo(payload_cwd(payload))
-    context = "The user requested MCT. Apply this routing guide:\n\n" + mct + todo_context(todo)
+    cwd = payload_cwd(payload)
+    todo = find_todo(cwd)
+    context = "The user requested MCT. Apply this routing guide:\n\n" + mct + opensrc_context(cwd) + todo_context(todo)
 
     print(json.dumps({
         "hookSpecificOutput": {

@@ -104,6 +104,7 @@ With GitHub Actions CI:
 ```bash
 ~/.claude/bin/mct status --md
 ~/.claude/bin/mct opensrc --fetch-metadata
+~/.claude/bin/mct audit --warn-only
 ~/.claude/bin/mct next --claim
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ~/.claude/bin/mct verify --mode pre-commit
@@ -115,6 +116,7 @@ Repo-local form for non-Claude agents:
 ```bash
 ./claude/bin/mct status --md
 ./claude/bin/mct opensrc --fetch-metadata
+./claude/bin/mct audit --warn-only
 ./claude/bin/mct next --claim
 ./claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ```
@@ -172,4 +174,5 @@ Expected behavior:
 6. Complete the selected TODO task.
 7. Run verification.
 8. Run `mct done "<task>" --check "<check>" --commit --all`.
-9. Continue to the next task or report blockers.
+9. Run `mct audit --warn-only`.
+10. Continue to the next task or report blockers.

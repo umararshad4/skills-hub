@@ -12,9 +12,23 @@ When the user says `use MCT`, `MCT mode`, `run MCT`, or similar, Claude should:
 6. Choose sequential or parallel execution based on dependency risk.
 7. Use the smallest safe workflow.
 8. Run event-appropriate checks.
-9. Finish with a completion receipt and TODO status.
+9. Run `mct audit --warn-only` and the `have-i-missed-something` skill.
+10. Finish with a completion receipt and TODO status.
 
 MCT does not mean "run every tool." It means "route the work through the correct engineering loop."
+
+## Decision Harness
+
+MCT should not ask the user about routine implementation decisions when the repository gives enough signal.
+
+Default behavior:
+
+- Inspect first.
+- Make a reasonable engineering decision.
+- Record the assumption.
+- Continue.
+
+Ask the user only when the decision is destructive, expensive to reverse, product-defining, credential/account-dependent, or contradicts existing instructions.
 
 ## opensrc Context
 
@@ -147,6 +161,7 @@ Supported hints:
 
 | Situation | Use Skills | Use Subagents | Checks |
 | --- | --- | --- | --- |
+| Before final response in MCT | `have-i-missed-something` | `reviewer` if risk is non-trivial | `mct audit --warn-only` |
 | Library/framework context needed | `opensrc`, plus task-specific skills | `planner` | official docs/source search, update `opensrc/` stubs |
 | New feature or behavior change | `frontend-architecture`, `ui-system`, Superpowers `brainstorming` for ambiguous/creative work | `planner`, then `frontend-implementer` | targeted tests, React Doctor if React changed |
 | TODO.md queue execution | `todo-orchestrator`, plus routed skills per item | `planner`, `frontend-implementer`, `reviewer`, parallel subagents only for independent items | per-item verification plus combined review |
@@ -192,6 +207,7 @@ Use this when deciding how to respond to the user's wording.
 | Before commit | Git hook template | Run secret scan and React Doctor diff for React projects. |
 | Before push | Git hook template | Run configured stronger checks from `automation-policy.json`. |
 | PR prep | Slash command | Run review, React Doctor if relevant, and draft PR text. |
+| Before final response | Mandatory MCT harness | Run `mct audit --warn-only`, fix missed steps or record skipped checks/risks. |
 
 ## MCT CLI
 
@@ -207,6 +223,7 @@ Use the deterministic CLI when available:
 ~/.claude/bin/mct commit --task "<task-id-or-slug>" --all
 ~/.claude/bin/mct self-update
 ~/.claude/bin/mct opensrc --fetch-metadata
+~/.claude/bin/mct audit --warn-only
 ~/.claude/bin/mct classify
 ~/.claude/bin/mct verify --mode pre-commit
 ~/.claude/bin/mct verify --mode pre-push
@@ -237,6 +254,7 @@ If the source repo is not in a standard location, set `MCT_SOURCE=/path/to/skill
 
 - Use `frontend-architecture` whenever file ownership, boundaries, data flow, or route structure can be affected.
 - Use `opensrc` at the start of MCT in projects with `package.json`, and whenever external library docs/context matter.
+- Use `have-i-missed-something` before every final response in MCT.
 - Use `todo-orchestrator` whenever `TODO.md` exists and MCT is requested.
 - Use `ui-system` whenever visible UI changes.
 - Use `react-doctor` whenever React files changed or before committing React work.
@@ -268,8 +286,10 @@ Every MCT task must end with:
 - What changed.
 - Skills/workflows used.
 - TODO items completed/open/blocked when `TODO.md` exists.
+- `opensrc` status when `package.json` exists.
 - Checks run.
 - Checks skipped and why.
+- `mct audit --warn-only` result or unresolved audit warnings.
 - Risks or follow-ups.
 
 Also write a structured receipt with `~/.claude/bin/mct receipt` when MCT was used for TODO queue execution, PR readiness, or a multi-step task.

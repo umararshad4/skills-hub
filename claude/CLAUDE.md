@@ -15,11 +15,16 @@ This is the global operating guide for Claude Code sessions.
 
 1. Understand the request and inspect the repo before changing code.
 2. If MCT is requested and root `TODO.md` exists, read it as the task queue before planning.
-3. Plan the smallest safe change that satisfies the goal.
-4. Implement within the existing architecture.
-5. Run targeted checks based on what changed.
-6. Self-review the diff for bugs, regressions, accessibility, security, and test gaps.
-7. Summarize changed files, TODO status if relevant, checks run, skipped checks with reasons, and remaining risks.
+3. If MCT is requested and `package.json` exists, initialize or refresh `opensrc/` before normal planning.
+4. Plan the smallest safe change that satisfies the goal.
+5. Implement within the existing architecture.
+6. Run targeted checks based on what changed.
+7. Run `mct audit --warn-only` before the final response.
+8. Summarize changed files, opensrc status, TODO status if relevant, checks run, skipped checks with reasons, and remaining risks.
+
+## Decision Policy
+
+Make routine engineering decisions from repo evidence instead of asking the user. Ask only for destructive, product-defining, credential/account-dependent, expensive-to-reverse, or contradictory choices.
 
 ## Frontend Defaults
 

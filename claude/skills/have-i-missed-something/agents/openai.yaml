@@ -1,0 +1,3 @@
+display_name: Have I Missed Something?
+short_description: Final MCT audit for missed steps, checks, TODOs, and commits.
+default_prompt: Audit whether MCT instructions were followed before finishing, and fix or record any missed steps.

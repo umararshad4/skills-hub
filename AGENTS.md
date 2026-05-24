@@ -26,7 +26,8 @@ When the user says `use MCT`, `MCT mode`, `run MCT`, or similar:
 6. Run verification before marking TODO items done.
 7. Mark completed TODO items with `[x]`.
 8. Create a descriptive commit after each verified TODO item when requested by the workflow.
-9. Finish with completed/open/blocked TODO items, checks run, skipped checks, commits, and risks.
+9. Run `mct audit --warn-only` or manually apply the same audit.
+10. Finish with opensrc status, completed/open/blocked TODO items, checks run, skipped checks, commits, and risks.
 
 ## CLI
 
@@ -35,6 +36,7 @@ If installed, use:
 ```bash
 ~/.claude/bin/mct status --md
 ~/.claude/bin/mct opensrc --fetch-metadata
+~/.claude/bin/mct audit --warn-only
 ~/.claude/bin/mct next --claim
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ~/.claude/bin/mct verify --mode pre-commit
@@ -70,6 +72,13 @@ If the CLI is not installed, use the repo-local CLI:
 - Use official docs, official repos, npm package pages, or framework/vendor docs.
 - Do not use random blog posts as authoritative context.
 - Do not commit `opensrc/` unless explicitly requested.
+
+## MCT Audit Rules
+
+- Run `mct audit --warn-only` before final response when available.
+- Use `claude/skills/have-i-missed-something/SKILL.md` as the final checklist.
+- Fix missed steps before final response when practical.
+- If a missed step cannot be fixed, record it as a skipped check or risk.
 
 ## Commit Rules
 

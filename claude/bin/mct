@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 DEFAULT_POLICY = {
     "todoQueue": {
         "fileName": "TODO.md",
@@ -439,9 +439,15 @@ def status_data(root: Path) -> dict:
     changed = git_files(root)
     staged = git_files(root, staged=True)
     surfaces = classify_files(changed or staged)
+    opensrc_dir = root / "opensrc"
     return {
         "root": str(root),
         "todo": str(todo_path) if todo_path else None,
+        "packageJson": str(root / "package.json") if (root / "package.json").exists() else None,
+        "opensrc": {
+            "exists": opensrc_dir.exists(),
+            "manifest": str(opensrc_dir / "manifest.json") if (opensrc_dir / "manifest.json").exists() else None,
+        },
         "tasks": [asdict(task) for task in tasks],
         "plan": task_plan(tasks),
         "changedFiles": changed,
@@ -459,6 +465,8 @@ def render_status_md(data: dict) -> str:
         "# MCT Status",
         "",
         f"- Root: `{data['root']}`",
+        f"- package.json: `{data['packageJson']}`" if data["packageJson"] else "- package.json: not found",
+        f"- opensrc: `{data['opensrc']['manifest']}`" if data["opensrc"]["manifest"] else "- opensrc: not initialized",
         f"- TODO.md: `{data['todo']}`" if data["todo"] else "- TODO.md: not found",
         f"- Tasks: {len(tasks)} total, {len(open_tasks)} open",
         f"- Mode: `{data['plan']['mode']}`",
@@ -502,6 +510,7 @@ def command_plan(args: argparse.Namespace) -> int:
     print(json.dumps({
         "root": data["root"],
         "todo": data["todo"],
+        "opensrc": data["opensrc"],
         "todoPlan": data["plan"],
         "changedSurfaces": data["surfaces"],
         "recommendedChecks": data["recommendedChecks"],
@@ -807,6 +816,70 @@ def command_opensrc(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_audit(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    data = status_data(root)
+    issues: list[dict] = []
+    state = data["state"]
+    runs = state.get("runs", [])
+    checks = state.get("checkHistory", [])
+
+    if data["packageJson"] and not data["opensrc"]["manifest"]:
+        issues.append({
+            "severity": "high",
+            "code": "opensrc-missing",
+            "message": "package.json exists but opensrc/manifest.json is missing. Run mct opensrc --fetch-metadata before normal MCT work.",
+        })
+
+    open_tasks = [task for task in data["tasks"] if not task["done"]]
+    if data["todo"] and open_tasks and not data["plan"].get("next"):
+        issues.append({
+            "severity": "medium",
+            "code": "todo-no-runnable-task",
+            "message": "TODO.md has open tasks but no runnable next task. Check blockers, missing dependencies, or cycles.",
+        })
+
+    if data["todo"] and not runs:
+        issues.append({
+            "severity": "medium",
+            "code": "no-receipts",
+            "message": "TODO.md exists but no MCT receipts were recorded. Completed tasks should use mct done with checks.",
+        })
+
+    if ("react" in data["surfaces"] or "ui" in data["surfaces"]) and not checks:
+        issues.append({
+            "severity": "high",
+            "code": "ui-verification-missing",
+            "message": "React/UI files changed but no check history exists. Run Playwright/Chrome verification, React Doctor, or record an explicit skipped check.",
+        })
+
+    recent_check_names = []
+    for item in checks[-5:]:
+        recent_check_names.extend(item.get("checksRun", []))
+    if ("react" in data["surfaces"] or "ui" in data["surfaces"]) and recent_check_names:
+        browser_checked = any("playwright" in check or "chrome" in check or "browser" in check for check in recent_check_names)
+        if not browser_checked:
+            issues.append({
+                "severity": "medium",
+                "code": "browser-check-not-recorded",
+                "message": "React/UI files changed and checks exist, but no Playwright/Chrome/browser verification was recorded.",
+            })
+
+    result = {
+        "ok": not issues,
+        "root": data["root"],
+        "issues": issues,
+        "requiredBeforeFinal": [
+            "opensrc initialized when package.json exists",
+            "TODO items checked off with mct done only after verification",
+            "Playwright/Chrome/browser check recorded for UI tasks when possible",
+            "checks/skipped-checks/risks included in final response",
+        ],
+    }
+    print(json.dumps(result, indent=2))
+    return 0 if result["ok"] or args.warn_only else 1
+
+
 def is_react_project(root: Path) -> bool:
     if any((root / name).exists() for name in ("next.config.js", "next.config.mjs", "next.config.ts")):
         return True
@@ -987,6 +1060,10 @@ def main() -> int:
     opensrc.add_argument("--force", action="store_true", help="Overwrite existing package context stubs")
     opensrc.add_argument("--limit", type=int)
     opensrc.set_defaults(func=command_opensrc)
+
+    audit = sub.add_parser("audit")
+    audit.add_argument("--warn-only", action="store_true")
+    audit.set_defaults(func=command_audit)
 
     verify = sub.add_parser("verify")
     verify.add_argument("--mode", choices=["pre-commit", "pre-push", "manual", "ci"], default="manual")
