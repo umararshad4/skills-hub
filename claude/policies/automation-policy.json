@@ -1,6 +1,6 @@
 {
   "name": "MCT automation policy",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "defaultMode": "balanced",
   "mctAliases": ["MCT", "mct", "my claude toolkit", "use MCT"],
   "todoQueue": {
@@ -19,7 +19,15 @@
     "chromeWhen": ["authenticated-profile", "extensions", "remote-profile-dependent-pages"],
     "requireCheckOrSkippedCheckForDone": true,
     "requireBrowserEvidenceForUiTodos": true,
-    "browserEvidenceMinimum": ["tool", "url-or-test-or-screenshot-or-command", "viewport-or-flow", "result=pass"]
+    "browserEvidenceMinimum": ["tool", "url-or-test-or-screenshot-or-command", "viewport-or-flow", "result=pass"],
+    "requireCommitShaInReceipts": true,
+    "requiredCheckMatrix": {
+      "ui": ["browser-proof"],
+      "react": ["react-doctor"],
+      "api": ["api-behavior-check"],
+      "security": ["negative-path-check"],
+      "typescript": ["typecheck-if-script-exists"]
+    }
   },
   "todoCommits": {
     "enabled": true,

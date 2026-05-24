@@ -16,8 +16,10 @@ Use MCT TODO orchestration for the current project.
 6. Update completed checkboxes only after verification.
 7. For UI/browser TODOs, record evidence with `--browser-evidence "tool=playwright-mcp | url=<target> | viewport=<sizes> | flow=<what passed> | result=pass"`.
 8. Run `~/.claude/bin/mct done "<task-id-or-slug>" --check "<check>" --commit --all` after verification when working through the TODO queue.
-9. If verification cannot run, use `--skipped-check "<reason>"` and explain the risk.
-10. Report completed, open, blocked, checks, commits, and risks.
+9. Confirm the receipt/commit chain with `~/.claude/bin/mct todo-log --md`.
+10. Run `~/.claude/bin/mct final-check --todo-log` before final response.
+11. If verification cannot run, use `--skipped-check "<reason>"` and explain the risk.
+12. Report completed, open, blocked, checks, commits, and risks.
 
 Focus, if provided:
 

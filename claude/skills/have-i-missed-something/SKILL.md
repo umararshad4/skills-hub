@@ -12,7 +12,7 @@ Use this as the final MCT harness before stopping.
 Run:
 
 ```bash
-~/.claude/bin/mct audit --warn-only
+~/.claude/bin/mct final-check --todo-log
 ```
 
 Then check manually:
@@ -28,6 +28,7 @@ Then check manually:
   - Invalid evidence: "checked UI", "browser ok", or only `--check "playwright-browser-check"`.
 - For React tasks, was React Doctor or an explicit skipped-check reason recorded?
 - Was a descriptive commit created for each verified TODO item when working through the TODO queue?
+- Does `mct todo-log --md` show a receipt and commit SHA for each completed TODO?
 - Did the final response include completed/open/blocked TODOs, checks, skipped checks, commits, and risks?
 
 ## Decision Harness

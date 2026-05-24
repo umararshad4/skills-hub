@@ -33,3 +33,7 @@ jobs:
       - name: Run MCT pre-push checks
         run: |
           python3 .github/mct/mct verify --mode ci
+
+      - name: Run MCT strict audit
+        run: |
+          python3 .github/mct/mct final-check --todo-log

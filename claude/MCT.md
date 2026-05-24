@@ -227,14 +227,20 @@ Use the deterministic CLI when available:
 ```bash
 ~/.claude/bin/mct status
 ~/.claude/bin/mct status --md
+~/.claude/bin/mct config
+~/.claude/bin/mct config --init
 ~/.claude/bin/mct plan
 ~/.claude/bin/mct next --claim
+~/.claude/bin/mct branch
+~/.claude/bin/mct browser-proof --url "http://localhost:3000" --viewport "1440x900,390x844" --flow "changed screen inspected" --result pass
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "..."
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "..." --commit --all
+~/.claude/bin/mct todo-log --md
 ~/.claude/bin/mct commit --task "<task-id-or-slug>" --all
 ~/.claude/bin/mct self-update
 ~/.claude/bin/mct opensrc --fetch-metadata
 ~/.claude/bin/mct audit --warn-only
+~/.claude/bin/mct final-check --todo-log
 ~/.claude/bin/mct classify
 ~/.claude/bin/mct verify --mode pre-commit
 ~/.claude/bin/mct verify --mode pre-push
@@ -251,7 +257,7 @@ Project bootstrap:
 ~/.claude/bin/mct init --project --ci
 ```
 
-`--project` creates `.mct/state.json`, adds `.mct/` to `.gitignore`, creates a `TODO.md` template if missing, and installs Git hooks. `--ci` also installs a GitHub Actions workflow and vendored `mct` CLI copy under `.github/mct/`.
+`--project` creates `.mct/state.json`, `.mct/config.json`, adds `.mct/` to `.gitignore`, creates a `TODO.md` template if missing, and installs Git hooks. `--ci` also installs a GitHub Actions workflow and vendored `mct` CLI copy under `.github/mct/`.
 
 Toolkit update:
 
@@ -315,8 +321,10 @@ Use this sequence:
 
 1. Complete the TODO item.
 2. Run post-task verification.
-3. Run `mct done ... --check ... --commit --all`.
-4. Continue to the next TODO item.
+3. For UI/browser tasks, run or record browser proof with target, viewport/flow, and `result=pass`.
+4. Run `mct done ... --check ... --commit --all`.
+5. Confirm the receipt contains a commit SHA with `mct todo-log --md` or `mct final-check --todo-log`.
+6. Continue to the next TODO item.
 
 Commit rules:
 
@@ -324,6 +332,29 @@ Commit rules:
 - Commit messages must describe the actual completed TODO task.
 - Do not mention Claude, MCT, AI, or agent tooling in commit subjects.
 - Do not force commits when unrelated user changes are present unless the user explicitly wants all changes included.
+- `mct done --commit` stores the commit SHA in the task receipt; the strict audit flags completed TODOs without a receipt or commit SHA.
+
+## Strict Proof And Audit
+
+Use `mct browser-proof` to create reusable browser evidence:
+
+```bash
+~/.claude/bin/mct browser-proof \
+  --url "http://localhost:3000/pricing" \
+  --viewport "1440x900,390x844" \
+  --flow "pricing toggle and CTA visible" \
+  --result pass
+```
+
+Pass the printed `browserEvidence` value to `mct done`.
+
+Use `mct final-check --todo-log` before final response. It runs the strict audit and prints the TODO trace. The audit flags:
+
+- checked TODOs without receipts;
+- completed TODOs missing required checks for their task type;
+- UI/browser tasks without browser proof or explicit skipped-check reason;
+- completed TODO receipts without commit SHAs when TODO commits are required;
+- browser proof references whose artifact files are missing.
 
 ## Anti-Patterns
 

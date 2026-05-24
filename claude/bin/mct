@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 DEFAULT_POLICY = {
     "todoQueue": {
         "fileName": "TODO.md",
@@ -48,6 +48,14 @@ def now() -> str:
 
 def run(cmd: list[str], cwd: Path, check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=str(cwd), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=check)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def find_root(start: Path) -> Path:
@@ -91,12 +99,85 @@ def load_policy() -> dict:
         return DEFAULT_POLICY
 
 
+def detect_stack(root: Path) -> dict:
+    package = read_package_json(root)
+    deps = {}
+    deps.update(package.get("dependencies", {}))
+    deps.update(package.get("devDependencies", {}))
+    scripts = package.get("scripts", {})
+    return {
+        "packageManager": "pnpm" if (root / "pnpm-lock.yaml").exists() else "yarn" if (root / "yarn.lock").exists() else "npm",
+        "hasPackageJson": bool(package),
+        "react": "react" in deps,
+        "nextjs": "next" in deps or any((root / name).exists() for name in ("next.config.js", "next.config.mjs", "next.config.ts")),
+        "vite": "vite" in deps or any((root / name).exists() for name in ("vite.config.js", "vite.config.ts", "vite.config.mjs")),
+        "typescript": (root / "tsconfig.json").exists() or "typescript" in deps,
+        "tailwind": any((root / name).exists() for name in ("tailwind.config.js", "tailwind.config.ts", "tailwind.config.mjs")),
+        "playwright": "@playwright/test" in deps or "playwright" in deps or (root / "playwright.config.ts").exists() or (root / "playwright.config.js").exists(),
+        "scripts": sorted(scripts.keys()),
+    }
+
+
+def default_config(root: Path) -> dict:
+    stack = detect_stack(root)
+    return {
+        "version": VERSION,
+        "generatedAt": now(),
+        "stack": stack,
+        "autonomy": {
+            "routineDecisions": "auto",
+            "askBefore": ["destructive changes", "product-defining UX choices", "credentials", "paid/external account changes"],
+            "commitPerVerifiedTodo": True,
+            "pushAutomatically": False,
+        },
+        "verification": {
+            "requireBrowserProofForUiTodos": True,
+            "requireReactDoctorForReactTodos": True,
+            "requireCommitForTodoWorkflow": True,
+            "typecheckScripts": [name for name in ("typecheck", "tsc") if name in stack["scripts"]],
+            "testScripts": [name for name in ("test", "test:unit", "e2e", "test:e2e") if name in stack["scripts"]],
+        },
+    }
+
+
+def load_config(root: Path) -> dict:
+    path = config_path(root)
+    if not path.exists():
+        return default_config(root)
+    try:
+        config = json.loads(path.read_text())
+    except Exception:
+        return default_config(root)
+    base = default_config(root)
+    for key, value in base.items():
+        config.setdefault(key, value)
+    config.setdefault("verification", {}).update({k: config.get("verification", {}).get(k, v) for k, v in base["verification"].items()})
+    config.setdefault("autonomy", {}).update({k: config.get("autonomy", {}).get(k, v) for k, v in base["autonomy"].items()})
+    return config
+
+
+def write_config(root: Path, force: bool = False) -> Path:
+    path = config_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if force or not path.exists():
+        path.write_text(json.dumps(default_config(root), indent=2, sort_keys=True) + "\n")
+    return path
+
+
 def state_path(root: Path) -> Path:
     return root / ".mct" / "state.json"
 
 
 def receipt_dir(root: Path) -> Path:
     return root / ".mct" / "receipts"
+
+
+def proof_dir(root: Path) -> Path:
+    return root / ".mct" / "browser-proof"
+
+
+def config_path(root: Path) -> Path:
+    return root / ".mct" / "config.json"
 
 
 def default_state() -> dict:
@@ -328,8 +409,14 @@ def git_commit(root: Path, subject: str, body: str, include_all: bool) -> dict:
     if body:
         cmd.extend(["-m", body])
     proc = subprocess.run(cmd, cwd=str(root), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    sha = ""
+    if proc.returncode == 0:
+        head = run(["git", "rev-parse", "HEAD"], root)
+        if head.returncode == 0:
+            sha = head.stdout.strip()
     return {
         "ok": proc.returncode == 0,
+        "sha": sha,
         "subject": subject,
         "body": body,
         "stdout": proc.stdout.strip(),
@@ -413,6 +500,60 @@ def is_ui_task(task: TodoTask) -> bool:
     )
 
 
+def is_react_task(task: TodoTask) -> bool:
+    lower_text = task.text.lower()
+    lower_files = [file.lower() for file in task.files]
+    return (
+        "react" in [tag.lower() for tag in task.tags]
+        or "react" in lower_text
+        or any(file.endswith((".tsx", ".jsx")) for file in lower_files)
+    )
+
+
+def is_api_task(task: TodoTask) -> bool:
+    lower = task.text.lower()
+    return any(signal in lower or signal in task.tags for signal in ("api", "route", "endpoint", "server", "backend"))
+
+
+def is_security_task(task: TodoTask) -> bool:
+    lower = task.text.lower()
+    return any(signal in lower or signal in task.tags for signal in ("auth", "security", "payment", "permission", "webhook"))
+
+
+def task_required_checks(task: TodoTask, root: Path) -> list[str]:
+    required = []
+    if is_ui_task(task):
+        required.append("browser-proof")
+    if is_react_task(task) and is_react_project(root):
+        required.append("react-doctor")
+    if is_api_task(task):
+        required.append("api-behavior-check")
+    if is_security_task(task):
+        required.append("negative-path-check")
+    if any(file.endswith((".ts", ".tsx")) for file in task.files) and package_has_script(root, "typecheck"):
+        required.append("typecheck")
+    return list(dict.fromkeys(required))
+
+
+def check_satisfies(required: str, checks: list[str], skipped: list[str]) -> bool:
+    names = " ".join([*checks, *skipped]).lower()
+    aliases = {
+        "diff-review": ("diff", "review"),
+        "browser-proof": ("browser", "playwright", "chrome", "screenshot", "responsive", "visual"),
+        "react-doctor": ("react-doctor",),
+        "api-behavior-check": ("api", "route", "endpoint", "curl", "integration"),
+        "negative-path-check": ("negative", "security", "auth", "permission", "webhook", "payment"),
+        "typecheck": ("typecheck", "tsc"),
+    }
+    return any(alias in names for alias in aliases.get(required, (required,)))
+
+
+def missing_required_checks(task: TodoTask, root: Path, checks: list[str] | None, skipped: list[str] | None) -> list[str]:
+    check_list = checks or []
+    skipped_list = skipped or []
+    return [required for required in task_required_checks(task, root) if not check_satisfies(required, check_list, skipped_list)]
+
+
 def browser_check_names(checks: list[str] | None) -> list[str]:
     return [
         check for check in (checks or [])
@@ -440,7 +581,7 @@ def valid_browser_evidence(items: list[str] | None) -> tuple[bool, str]:
     for item in parsed:
         raw = item.get("raw", "").strip()
         result = item.get("result", "").lower()
-        target = item.get("url") or item.get("file") or item.get("screenshot") or item.get("test") or item.get("command")
+        target = item.get("url") or item.get("file") or item.get("screenshot") or item.get("test") or item.get("command") or item.get("proof")
         covered_flow = item.get("viewport") or item.get("flow") or item.get("assertion") or item.get("page")
         if len(raw) < 12:
             return False, "browser evidence is too vague"
@@ -448,11 +589,30 @@ def valid_browser_evidence(items: list[str] | None) -> tuple[bool, str]:
             return False, "browser evidence must include result=pass"
         if result not in {"pass", "passed", "ok", "success"}:
             return False, f"browser evidence did not pass: {raw}"
-        if not target and not re.search(r"(https?://|localhost|127\.0\.0\.1|file=|screenshot=|test=|command=)", raw, re.IGNORECASE):
+        if not target and not re.search(r"(https?://|localhost|127\.0\.0\.1|file=|screenshot=|test=|command=|proof=)", raw, re.IGNORECASE):
             return False, f"browser evidence lacks a target: {raw}"
         if not covered_flow:
             return False, f"browser evidence lacks viewport, flow, assertion, or page: {raw}"
     return True, ""
+
+
+def browser_artifact_issue(root: Path, evidence: list[dict]) -> str:
+    for item in evidence:
+        screenshot = item.get("screenshot")
+        if screenshot:
+            path = Path(screenshot).expanduser()
+            if not path.is_absolute():
+                path = root / path
+            if not path.exists():
+                return f"screenshot artifact is missing: {screenshot}"
+        proof = item.get("proof")
+        if proof:
+            path = Path(proof).expanduser()
+            if not path.is_absolute():
+                path = root / path
+            if not path.exists():
+                return f"browser proof artifact is missing: {proof}"
+    return ""
 
 
 def task_plan(tasks: list[TodoTask]) -> dict:
@@ -604,11 +764,82 @@ def command_next(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_todo_log(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    _, tasks = parse_todo(root, load_policy())
+    receipts = load_receipts(root)
+    receipt_by_task = {
+        task_id_value: {"path": str(path.relative_to(root)), **receipt}
+        for path, receipt in receipts
+        for task_id_value in receipt.get("completedTasks", [])
+    }
+    rows = []
+    for task in tasks:
+        receipt = receipt_by_task.get(task.id, {})
+        rows.append({
+            "id": task.id,
+            "status": "done" if task.done else load_state(root).get("tasks", {}).get(task.id, {}).get("status", "open"),
+            "text": task.clean_text,
+            "requiredChecks": task_required_checks(task, root),
+            "checksRun": receipt.get("checksRun", []),
+            "checksSkipped": receipt.get("checksSkipped", []),
+            "browserEvidence": receipt.get("browserEvidence", []),
+            "receipt": receipt.get("path"),
+            "commit": (receipt.get("commit") or {}).get("sha"),
+        })
+    if args.md:
+        print("# MCT TODO Log\n")
+        for row in rows:
+            print(f"- `{row['id']}` {row['status']}: {row['text']}")
+            if row["requiredChecks"]:
+                print(f"  - required: {', '.join(row['requiredChecks'])}")
+            if row["checksRun"]:
+                print(f"  - checks: {', '.join(row['checksRun'])}")
+            if row["checksSkipped"]:
+                print(f"  - skipped: {'; '.join(row['checksSkipped'])}")
+            if row["commit"]:
+                print(f"  - commit: {row['commit']}")
+            if row["receipt"]:
+                print(f"  - receipt: {row['receipt']}")
+    else:
+        print(json.dumps({"root": str(root), "tasks": rows}, indent=2))
+    return 0
+
+
+def command_branch(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    if not (root / ".git").exists():
+        raise SystemExit("not a git repository")
+    name = args.name
+    if not name:
+        _, tasks = parse_todo(root, load_policy())
+        plan = task_plan(tasks)
+        next_tasks = plan.get("next", [])
+        if not next_tasks:
+            raise SystemExit("no runnable TODO task found for branch name")
+        name = next_tasks[0]["slug"]
+    branch = name if name.startswith(args.prefix) else f"{args.prefix}{slugify(name)}"
+    proc = subprocess.run(["git", "switch", "-c", branch], cwd=str(root), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = {"ok": proc.returncode == 0, "branch": branch, "stdout": proc.stdout.strip(), "stderr": proc.stderr.strip()}
+    print(json.dumps(result, indent=2))
+    return 0 if result["ok"] else 1
+
+
 def command_classify(args: argparse.Namespace) -> int:
     root = find_root(Path.cwd())
     files = args.files or git_files(root, staged=args.staged)
     surfaces = classify_files(files)
     print(json.dumps({"root": str(root), "files": files, "surfaces": surfaces, "recommendedChecks": recommend_checks(root, surfaces)}, indent=2))
+    return 0
+
+
+def command_config(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    if args.init:
+        path = write_config(root, force=args.force)
+        print(json.dumps({"ok": True, "config": str(path), "data": load_config(root)}, indent=2))
+        return 0
+    print(json.dumps(load_config(root), indent=2))
     return 0
 
 
@@ -632,6 +863,35 @@ def append_receipt(root: Path, receipt: dict) -> Path:
     return path
 
 
+def update_receipt(path: Path, updates: dict) -> None:
+    try:
+        receipt = json.loads(path.read_text())
+    except Exception:
+        return
+    receipt.update(updates)
+    path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+
+
+def load_receipts(root: Path) -> list[tuple[Path, dict]]:
+    receipts = []
+    directory = receipt_dir(root)
+    if not directory.exists():
+        return receipts
+    for path in sorted(directory.glob("*.json")):
+        try:
+            receipts.append((path, json.loads(path.read_text())))
+        except Exception:
+            continue
+    return receipts
+
+
+def commit_exists(root: Path, sha: str | None) -> bool:
+    if not sha:
+        return False
+    proc = run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], root)
+    return proc.returncode == 0
+
+
 def command_receipt(args: argparse.Namespace) -> int:
     root = find_root(Path.cwd())
     receipt = {
@@ -648,6 +908,61 @@ def command_receipt(args: argparse.Namespace) -> int:
     path = append_receipt(root, receipt)
     print(json.dumps({"receipt": str(path), **receipt}, indent=2))
     return 0
+
+
+def command_browser_proof(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    if not (args.url or args.test or args.screenshot or args.command):
+        raise SystemExit("browser-proof requires at least one target: --url, --test, --screenshot, or --command")
+    if args.result.lower() not in {"pass", "passed", "ok", "success", "fail", "failed"}:
+        raise SystemExit("--result must be pass or fail")
+    screenshot_meta = None
+    if args.screenshot:
+        screenshot_path = Path(args.screenshot).expanduser()
+        if not screenshot_path.is_absolute():
+            screenshot_path = root / screenshot_path
+        if not screenshot_path.exists():
+            raise SystemExit(f"screenshot not found: {screenshot_path}")
+        screenshot_meta = {
+            "path": str(screenshot_path),
+            "sha256": sha256_file(screenshot_path),
+            "bytes": screenshot_path.stat().st_size,
+        }
+    proof = {
+        "at": now(),
+        "tool": args.tool,
+        "url": args.url,
+        "test": args.test,
+        "command": args.command,
+        "viewport": args.viewport,
+        "flow": args.flow,
+        "assertion": args.assertion,
+        "result": args.result,
+        "screenshot": screenshot_meta,
+    }
+    proof_dir(root).mkdir(parents=True, exist_ok=True)
+    proof_id = hashlib.sha1(json.dumps(proof, sort_keys=True).encode()).hexdigest()[:12]
+    path = proof_dir(root) / f"{proof_id}.json"
+    path.write_text(json.dumps(proof, indent=2, sort_keys=True) + "\n")
+    evidence = f"tool={args.tool}"
+    if args.url:
+        evidence += f" | url={args.url}"
+    if args.test:
+        evidence += f" | test={args.test}"
+    if args.command:
+        evidence += f" | command={args.command}"
+    if args.viewport:
+        evidence += f" | viewport={args.viewport}"
+    if args.flow:
+        evidence += f" | flow={args.flow}"
+    if args.assertion:
+        evidence += f" | assertion={args.assertion}"
+    if screenshot_meta:
+        evidence += f" | screenshot={screenshot_meta['path']}"
+    evidence += f" | proof={path.relative_to(root)} | result={args.result}"
+    result = {"ok": args.result.lower() in {"pass", "passed", "ok", "success"}, "proof": str(path), "browserEvidence": evidence}
+    print(json.dumps(result, indent=2))
+    return 0 if result["ok"] else 1
 
 
 def update_todo_checkbox(todo_path: Path, line_no: int) -> None:
@@ -684,6 +999,13 @@ def command_done(args: argparse.Namespace) -> int:
                 f"{browser_evidence_reason}. Example: --browser-evidence "
                 "'tool=playwright-mcp | url=http://localhost:3000/pricing | viewport=1440x900,390x844 | result=pass'"
             )
+    missing_checks = missing_required_checks(task, root, args.check, args.skipped_check)
+    if missing_checks:
+        raise SystemExit(
+            "TODO completion is missing required checks for this task type: "
+            + ", ".join(missing_checks)
+            + ". Run the checks or record a concrete --skipped-check reason."
+        )
     if not task.done:
         update_todo_checkbox(todo_path, task.line)
     state = load_state(root)
@@ -713,6 +1035,23 @@ def command_done(args: argparse.Namespace) -> int:
         subject = args.message or commit_subject(task, args.summary)
         body = commit_body(task, args.check or [], args.skipped_check or [], receipt_path.relative_to(root))
         commit_result = git_commit(root, subject, body, args.all)
+        if commit_result.get("ok"):
+            commit_payload = {
+                "commit": {
+                    "sha": commit_result.get("sha"),
+                    "subject": commit_result.get("subject"),
+                }
+            }
+            update_receipt(receipt_path, commit_payload)
+            state = load_state(root)
+            state.setdefault("tasks", {}).setdefault(task.id, {})
+            state["tasks"][task.id]["commit"] = commit_payload["commit"]
+            for run_item in state.get("runs", []):
+                if run_item.get("receipt") == str(receipt_path.relative_to(root)):
+                    run_item["commit"] = commit_payload["commit"]
+            save_state(root, state)
+        elif not args.allow_no_commit:
+            raise SystemExit(f"commit failed after TODO completion: {commit_result.get('reason') or commit_result.get('stderr')}")
     print(json.dumps({"done": asdict(task), "todoUpdated": str(todo_path), "receipt": str(receipt_path), "commit": commit_result}, indent=2))
     return 0
 
@@ -911,6 +1250,17 @@ def command_audit(args: argparse.Namespace) -> int:
     state = data["state"]
     runs = state.get("runs", [])
     checks = state.get("checkHistory", [])
+    receipts = load_receipts(root)
+    receipt_task_ids = {
+        task_id_value
+        for _, receipt in receipts
+        for task_id_value in receipt.get("completedTasks", [])
+    }
+    receipt_by_task = {
+        task_id_value: receipt
+        for _, receipt in receipts
+        for task_id_value in receipt.get("completedTasks", [])
+    }
 
     if data["packageJson"] and not data["opensrc"]["manifest"]:
         issues.append({
@@ -933,6 +1283,40 @@ def command_audit(args: argparse.Namespace) -> int:
             "code": "no-receipts",
             "message": "TODO.md exists but no MCT receipts were recorded. Completed tasks should use mct done with checks.",
         })
+
+    for task_data in data["tasks"]:
+        if not task_data["done"]:
+            continue
+        task = TodoTask(**task_data)
+        receipt = receipt_by_task.get(task.id)
+        if not receipt:
+            issues.append({
+                "severity": "high",
+                "code": "checked-todo-without-receipt",
+                "message": f"TODO item is checked but has no matching receipt: {task.clean_text}",
+            })
+            continue
+        missing = missing_required_checks(task, root, receipt.get("checksRun", []), receipt.get("checksSkipped", []))
+        if missing:
+            issues.append({
+                "severity": "high",
+                "code": "completed-todo-missing-required-checks",
+                "message": f"Completed TODO is missing required checks ({', '.join(missing)}): {task.clean_text}",
+            })
+        commit = receipt.get("commit") or state.get("tasks", {}).get(task.id, {}).get("commit")
+        if load_config(root).get("verification", {}).get("requireCommitForTodoWorkflow", True):
+            if not commit:
+                issues.append({
+                    "severity": "medium",
+                    "code": "completed-todo-without-commit",
+                    "message": f"Completed TODO has a receipt but no commit SHA: {task.clean_text}",
+                })
+            elif not commit_exists(root, commit.get("sha")):
+                issues.append({
+                    "severity": "high",
+                    "code": "completed-todo-commit-missing",
+                    "message": f"Completed TODO references a commit that is not present locally: {task.clean_text}",
+                })
 
     if ("react" in data["surfaces"] or "ui" in data["surfaces"]) and not checks:
         issues.append({
@@ -968,6 +1352,12 @@ def command_audit(args: argparse.Namespace) -> int:
                 "code": "browser-evidence-too-weak",
                 "message": "Browser evidence exists but is too vague or did not pass. Record concrete Playwright/Chrome evidence with target, viewport/test/screenshot, and result=pass.",
             })
+        elif browser_artifact_issue(root, recent_browser_evidence):
+            issues.append({
+                "severity": "high",
+                "code": "browser-artifact-missing",
+                "message": browser_artifact_issue(root, recent_browser_evidence),
+            })
     elif ("react" in data["surfaces"] or "ui" in data["surfaces"]) and recent_skipped_checks:
         explicit_browser_skip = any(re.search(r"(playwright|chrome|browser)", check, re.IGNORECASE) for check in recent_skipped_checks)
         if not explicit_browser_skip:
@@ -990,6 +1380,15 @@ def command_audit(args: argparse.Namespace) -> int:
     }
     print(json.dumps(result, indent=2))
     return 0 if result["ok"] or args.warn_only else 1
+
+
+def command_final_check(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    audit_args = argparse.Namespace(warn_only=args.warn_only)
+    code = command_audit(audit_args)
+    if args.todo_log:
+        command_todo_log(argparse.Namespace(md=True))
+    return code
 
 
 def is_react_project(root: Path) -> bool:
@@ -1100,6 +1499,7 @@ def command_init(args: argparse.Namespace) -> int:
     result = {"root": str(root), "state": str(state_path(root)), "ok": True}
     if args.project:
         ensure_gitignore(root)
+        result["config"] = str(write_config(root, force=args.force_config))
         if not (root / "TODO.md").exists():
             template = claude_root() / "templates" / "docs" / "mct-todo.md"
             if template.exists():
@@ -1153,6 +1553,11 @@ def main() -> int:
 
     sub.add_parser("plan").set_defaults(func=command_plan)
 
+    config = sub.add_parser("config")
+    config.add_argument("--init", action="store_true")
+    config.add_argument("--force", action="store_true")
+    config.set_defaults(func=command_config)
+
     next_cmd = sub.add_parser("next")
     next_cmd.add_argument("--claim", action="store_true")
     next_cmd.set_defaults(func=command_next)
@@ -1160,6 +1565,7 @@ def main() -> int:
     init = sub.add_parser("init")
     init.add_argument("--project", action="store_true")
     init.add_argument("--ci", action="store_true")
+    init.add_argument("--force-config", action="store_true")
     init.set_defaults(func=command_init)
 
     classify = sub.add_parser("classify")
@@ -1176,6 +1582,32 @@ def main() -> int:
     audit = sub.add_parser("audit")
     audit.add_argument("--warn-only", action="store_true")
     audit.set_defaults(func=command_audit)
+
+    final_check = sub.add_parser("final-check")
+    final_check.add_argument("--warn-only", action="store_true")
+    final_check.add_argument("--todo-log", action="store_true")
+    final_check.set_defaults(func=command_final_check)
+
+    browser_proof = sub.add_parser("browser-proof")
+    browser_proof.add_argument("--tool", default="playwright-mcp")
+    browser_proof.add_argument("--url")
+    browser_proof.add_argument("--test")
+    browser_proof.add_argument("--command")
+    browser_proof.add_argument("--screenshot")
+    browser_proof.add_argument("--viewport", default="")
+    browser_proof.add_argument("--flow", default="")
+    browser_proof.add_argument("--assertion", default="")
+    browser_proof.add_argument("--result", default="pass")
+    browser_proof.set_defaults(func=command_browser_proof)
+
+    todo_log = sub.add_parser("todo-log")
+    todo_log.add_argument("--md", action="store_true")
+    todo_log.set_defaults(func=command_todo_log)
+
+    branch = sub.add_parser("branch")
+    branch.add_argument("name", nargs="?")
+    branch.add_argument("--prefix", default="umar/")
+    branch.set_defaults(func=command_branch)
 
     verify = sub.add_parser("verify")
     verify.add_argument("--mode", choices=["pre-commit", "pre-push", "manual", "ci"], default="manual")
@@ -1207,6 +1639,7 @@ def main() -> int:
     done.add_argument("--risk", action="append")
     done.add_argument("--commit", action="store_true")
     done.add_argument("--all", action="store_true", help="Stage all changes before committing")
+    done.add_argument("--allow-no-commit", action="store_true", help="Do not fail if --commit has no staged changes to commit")
     done.add_argument("--message")
     done.set_defaults(func=command_done)
 

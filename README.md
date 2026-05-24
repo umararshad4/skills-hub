@@ -106,11 +106,15 @@ With GitHub Actions CI:
 
 ```bash
 ~/.claude/bin/mct status --md
+~/.claude/bin/mct config --init
 ~/.claude/bin/mct opensrc --fetch-metadata
 ~/.claude/bin/mct audit --warn-only
+~/.claude/bin/mct final-check --todo-log
 ~/.claude/bin/mct next --claim
+~/.claude/bin/mct browser-proof --url "http://localhost:3000" --viewport "1440x900,390x844" --flow "changed screen inspected" --result pass
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ~/.claude/bin/mct done "<ui-task>" --check "playwright-browser-check" --browser-evidence "tool=playwright-mcp | url=http://localhost:3000 | viewport=1440x900,390x844 | result=pass" --commit --all
+~/.claude/bin/mct todo-log --md
 ~/.claude/bin/mct verify --mode pre-commit
 ~/.claude/bin/mct verify --mode pre-push
 ```
@@ -119,11 +123,15 @@ Repo-local form for non-Claude agents:
 
 ```bash
 ./claude/bin/mct status --md
+./claude/bin/mct config --init
 ./claude/bin/mct opensrc --fetch-metadata
 ./claude/bin/mct audit --warn-only
+./claude/bin/mct final-check --todo-log
 ./claude/bin/mct next --claim
+./claude/bin/mct browser-proof --url "http://localhost:3000" --viewport "1440x900,390x844" --flow "changed screen inspected" --result pass
 ./claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ./claude/bin/mct done "<ui-task>" --check "playwright-browser-check" --browser-evidence "tool=playwright-mcp | url=http://localhost:3000 | viewport=1440x900,390x844 | result=pass" --commit --all
+./claude/bin/mct todo-log --md
 ```
 
 ## TODO.md Workflow
@@ -141,6 +149,10 @@ Example:
 MCT will classify tasks, choose sequential or safe parallel execution, require verification before completion, check off completed tasks, and optionally create descriptive commits.
 
 UI/browser TODOs are strict. A check name alone is not enough. `mct done` requires Playwright/Chrome/browser evidence with a target URL, viewport or tested flow, and pass result, or an explicit skipped-check reason with the blocker.
+
+The strict audit also checks the chain from TODO to receipt to commit. A checked TODO without a receipt is flagged, and a completed TODO receipt without a commit SHA is flagged when TODO commits are required. Use `mct todo-log --md` to inspect task -> checks -> browser proof -> receipt -> commit.
+
+`mct browser-proof` creates a local proof artifact under `.mct/browser-proof/` and prints a `browserEvidence` string you can pass to `mct done`.
 
 ## opensrc Workflow
 
@@ -179,7 +191,7 @@ Expected behavior:
 4. Run `mct status --md`.
 5. Run `mct next --claim`.
 6. Complete the selected TODO task.
-7. Run verification.
+7. Run verification, using `mct browser-proof` for UI/browser work when useful.
 8. Run `mct done "<task>" --check "<check>" --commit --all`.
-9. Run `mct audit --warn-only`.
+9. Run `mct final-check --todo-log`.
 10. Continue to the next task or report blockers.

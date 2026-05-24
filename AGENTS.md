@@ -35,9 +35,12 @@ If installed, use:
 
 ```bash
 ~/.claude/bin/mct status --md
+~/.claude/bin/mct config --init
 ~/.claude/bin/mct opensrc --fetch-metadata
 ~/.claude/bin/mct audit --warn-only
+~/.claude/bin/mct final-check --todo-log
 ~/.claude/bin/mct next --claim
+~/.claude/bin/mct browser-proof --url "http://localhost:3000" --viewport "1440x900,390x844" --flow "changed screen inspected" --result pass
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ~/.claude/bin/mct verify --mode pre-commit
 ~/.claude/bin/mct verify --mode pre-push
@@ -61,6 +64,8 @@ If the CLI is not installed, use the repo-local CLI:
 
 - UI/browser TODOs need Playwright/browser verification when possible.
 - UI/browser TODOs need evidence-grade verification: tool, target URL/test/screenshot/command, viewport or flow, and `result=pass`. A check label alone is not enough.
+- Completed TODOs need a receipt and, in the TODO automation workflow, a descriptive commit SHA in that receipt.
+- Use `mct todo-log --md` or `mct final-check --todo-log` to inspect the task -> check -> proof -> receipt -> commit chain.
 - Frontend/UI/UX tasks should use `frontend-ui-ux-harness`; when available, also use `frontend-design`, `design-taste-frontend`, and `ui-ux-pro-max`.
 - For frontend animation and fluid behavior, use Aceternity UI official docs/components/templates as the preferred reference, then adapt to the existing product style.
 - Use Chrome/profile-based verification when authenticated browser state or extensions are required.
