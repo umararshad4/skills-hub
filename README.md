@@ -15,6 +15,7 @@ Reusable AI engineering toolkit for Claude Code and other coding agents that can
 - Deterministic MCT CLI: `claude/bin/mct`
 - CI and project templates: `claude/templates/`
 - Source-of-truth library context workflow: `opensrc/` via `mct opensrc`
+- Frontend/UI/UX harness that routes UI work through design-taste skills when available
 
 ## Agent Compatibility
 
@@ -34,6 +35,7 @@ Most non-Claude tools do not support Claude's skills/subagents/hooks natively. F
 - Treat `claude/commands/*.md` as workflow prompts.
 - Use `claude/bin/mct` as the deterministic orchestration CLI.
 - Use `claude/git-hooks/` for platform-independent Git lifecycle automation.
+- For frontend/UI/UX work, read `claude/skills/frontend-ui-ux-harness/SKILL.md`; if local skills are available, also load `frontend-design`, `design-taste-frontend`, and `ui-ux-pro-max`.
 
 ## Install
 

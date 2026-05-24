@@ -60,6 +60,7 @@ If the CLI is not installed, use the repo-local CLI:
 ## Verification Rules
 
 - UI/browser TODOs need Playwright/browser verification when possible.
+- Frontend/UI/UX tasks should use `frontend-ui-ux-harness`; when available, also use `frontend-design`, `design-taste-frontend`, and `ui-ux-pro-max`.
 - Use Chrome/profile-based verification when authenticated browser state or extensions are required.
 - React TODOs need React Doctor or targeted React checks.
 - TypeScript/shared logic needs typecheck and focused tests where available.

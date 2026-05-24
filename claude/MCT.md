@@ -167,7 +167,8 @@ Supported hints:
 | TODO.md queue execution | `todo-orchestrator`, plus routed skills per item | `planner`, `frontend-implementer`, `reviewer`, parallel subagents only for independent items | per-item verification plus combined review |
 | Multi-step implementation from approved requirements | Superpowers `writing-plans`, `frontend-architecture` | `planner`, `frontend-implementer`, `test-runner` | task-level tests, typecheck if shared logic changed |
 | Bug fix | `debugging-loop`, maybe `react-doctor` | `planner` for diagnosis, `frontend-implementer`, `test-runner` | regression check that proves the fix |
-| UI change | `ui-system`, `design-consistency`, `react-doctor` | `frontend-implementer`, `ui-verifier` if meaningful UI changed | browser/responsive check for meaningful surfaces |
+| Frontend/UI/UX task | `frontend-ui-ux-harness`, `frontend-design`, `design-taste-frontend`, `ui-ux-pro-max`, `ui-system`, `design-consistency`, `react-doctor` | `frontend-implementer`, `ui-verifier` if meaningful UI changed | Playwright/Chrome/browser responsive check, React Doctor if React changed |
+| UI change | `frontend-ui-ux-harness`, `frontend-design`, `design-taste-frontend`, `ui-ux-pro-max`, `ui-system`, `design-consistency`, `react-doctor` | `frontend-implementer`, `ui-verifier` if meaningful UI changed | browser/responsive check for meaningful surfaces |
 | React component/hook change | `react-quality`, `react-doctor`, `code-review` | `react-doctor-runner`, `reviewer` | `npx -y react-doctor@latest . --verbose --diff` |
 | Next.js routing/data change | `nextjs-app-router`, `frontend-architecture` | `planner`, `test-runner` | typecheck and route/data tests if available |
 | Refactor | `refactor-safely`, `code-review`, Superpowers `writing-plans` for broad work | `planner`, `reviewer`, `test-runner` | before/after behavior checks |
@@ -255,6 +256,7 @@ If the source repo is not in a standard location, set `MCT_SOURCE=/path/to/skill
 - Use `frontend-architecture` whenever file ownership, boundaries, data flow, or route structure can be affected.
 - Use `opensrc` at the start of MCT in projects with `package.json`, and whenever external library docs/context matter.
 - Use `have-i-missed-something` before every final response in MCT.
+- Use `frontend-ui-ux-harness` for every frontend, UI, UX, styling, layout, responsive, interaction, design-system, or visual task. That harness requires `frontend-design`, `design-taste-frontend`, and `ui-ux-pro-max` when those skills are available.
 - Use `todo-orchestrator` whenever `TODO.md` exists and MCT is requested.
 - Use `ui-system` whenever visible UI changes.
 - Use `react-doctor` whenever React files changed or before committing React work.
