@@ -19,13 +19,14 @@ MCT means "My Claude Toolkit", but non-Claude agents should treat it as a genera
 When the user says `use MCT`, `MCT mode`, `run MCT`, or similar:
 
 1. Inspect the project before editing.
-2. Look for a root `TODO.md`.
-3. If `TODO.md` exists, run or emulate `mct status`, `mct next`, `mct done`, and `mct verify` behavior.
-4. Route work through the relevant skill guidance under `claude/skills/`.
-5. Run verification before marking TODO items done.
-6. Mark completed TODO items with `[x]`.
-7. Create a descriptive commit after each verified TODO item when requested by the workflow.
-8. Finish with completed/open/blocked TODO items, checks run, skipped checks, commits, and risks.
+2. If `package.json` exists, initialize or refresh `opensrc/` and use official source-of-truth library docs for relevant dependencies.
+3. Look for a root `TODO.md`.
+4. If `TODO.md` exists, run or emulate `mct status`, `mct next`, `mct done`, and `mct verify` behavior.
+5. Route work through the relevant skill guidance under `claude/skills/`.
+6. Run verification before marking TODO items done.
+7. Mark completed TODO items with `[x]`.
+8. Create a descriptive commit after each verified TODO item when requested by the workflow.
+9. Finish with completed/open/blocked TODO items, checks run, skipped checks, commits, and risks.
 
 ## CLI
 
@@ -33,6 +34,7 @@ If installed, use:
 
 ```bash
 ~/.claude/bin/mct status --md
+~/.claude/bin/mct opensrc --fetch-metadata
 ~/.claude/bin/mct next --claim
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ~/.claude/bin/mct verify --mode pre-commit
@@ -60,6 +62,14 @@ If the CLI is not installed, use the repo-local CLI:
 - React TODOs need React Doctor or targeted React checks.
 - TypeScript/shared logic needs typecheck and focused tests where available.
 - Do not mark a TODO item complete without a real check or an explicit skipped-check reason.
+
+## opensrc Rules
+
+- `opensrc/` is local, gitignored source-of-truth library context.
+- Build it from the target project's `package.json`.
+- Use official docs, official repos, npm package pages, or framework/vendor docs.
+- Do not use random blog posts as authoritative context.
+- Do not commit `opensrc/` unless explicitly requested.
 
 ## Commit Rules
 

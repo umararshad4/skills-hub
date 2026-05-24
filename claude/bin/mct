@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 DEFAULT_POLICY = {
     "todoQueue": {
         "fileName": "TODO.md",
@@ -658,6 +658,155 @@ def package_has_script(root: Path, name: str) -> bool:
     return name in package.get("scripts", {})
 
 
+def read_package_json(root: Path) -> dict:
+    path = root / "package.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def package_dependencies(root: Path) -> dict[str, str]:
+    package = read_package_json(root)
+    deps: dict[str, str] = {}
+    for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+        for name, version in package.get(key, {}).items():
+            deps[name] = version
+    return dict(sorted(deps.items()))
+
+
+def safe_package_filename(name: str) -> str:
+    return name.replace("@", "").replace("/", "__")
+
+
+def npm_metadata(root: Path, package: str) -> dict:
+    if not shutil.which("npm"):
+        return {}
+    proc = run(["npm", "view", package, "--json"], root)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {}
+    try:
+        data = json.loads(proc.stdout)
+    except Exception:
+        return {}
+    repo = data.get("repository")
+    if isinstance(repo, dict):
+        repo_url = repo.get("url", "")
+    else:
+        repo_url = str(repo or "")
+    return {
+        "latest": data.get("version"),
+        "homepage": data.get("homepage"),
+        "repository": repo_url.replace("git+", "").replace("git://", "https://").replace(".git", ""),
+        "npm": f"https://www.npmjs.com/package/{package}",
+        "description": data.get("description"),
+        "license": data.get("license"),
+    }
+
+
+def ensure_gitignore_entries(root: Path, entries: list[str]) -> None:
+    path = root / ".gitignore"
+    lines = path.read_text(errors="ignore").splitlines() if path.exists() else []
+    changed = False
+    for entry in entries:
+        if entry not in lines:
+            lines.append(entry)
+            changed = True
+    if changed or not path.exists():
+        path.write_text("\n".join(lines) + "\n")
+
+
+def command_opensrc(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    deps = package_dependencies(root)
+    opensrc = root / "opensrc"
+    packages_dir = opensrc / "packages"
+    packages_dir.mkdir(parents=True, exist_ok=True)
+    ensure_gitignore_entries(root, ["opensrc/"])
+
+    manifest = {
+        "generatedAt": now(),
+        "root": str(root),
+        "sourcePolicy": "Use official source-of-truth docs/repos only. Fill package files using web/search against official docs, GitHub repos, npm package pages, or framework docs.",
+        "packages": [],
+    }
+
+    selected = list(deps.items())
+    if args.limit:
+        selected = selected[: args.limit]
+
+    for name, declared in selected:
+        meta = npm_metadata(root, name) if args.fetch_metadata else {}
+        item = {
+            "name": name,
+            "declaredVersion": declared,
+            "latest": meta.get("latest"),
+            "homepage": meta.get("homepage"),
+            "repository": meta.get("repository"),
+            "npm": meta.get("npm", f"https://www.npmjs.com/package/{name}"),
+            "description": meta.get("description"),
+            "license": meta.get("license"),
+            "contextFile": f"packages/{safe_package_filename(name)}.md",
+            "status": "stub",
+        }
+        manifest["packages"].append(item)
+        package_file = packages_dir / f"{safe_package_filename(name)}.md"
+        if not package_file.exists() or args.force:
+            package_file.write_text(
+                "\n".join([
+                    f"# {name}",
+                    "",
+                    f"- Declared version: `{declared}`",
+                    f"- Latest version: `{item['latest'] or 'unknown'}`",
+                    f"- npm: {item['npm']}",
+                    f"- Homepage: {item['homepage'] or 'unknown'}",
+                    f"- Repository: {item['repository'] or 'unknown'}",
+                    "",
+                    "## Source-Of-Truth Context",
+                    "",
+                    "Use web/search to fill this file from official docs, the official repository, npm package docs, or framework documentation.",
+                    "",
+                    "## Key APIs Used In This Project",
+                    "",
+                    "- Pending.",
+                    "",
+                    "## Patterns And Constraints",
+                    "",
+                    "- Pending.",
+                    "",
+                    "## Version Notes",
+                    "",
+                    "- Pending.",
+                    "",
+                ]) + "\n"
+            )
+
+    (opensrc / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    readme = opensrc / "README.md"
+    if not readme.exists() or args.force:
+        readme.write_text(
+            "# opensrc\n\n"
+            "Project-local source-of-truth library context for agents.\n\n"
+            "This directory is intentionally gitignored. It should contain copied/summarized context from official docs, official repositories, npm package pages, or framework docs.\n\n"
+            "Run:\n\n"
+            "```bash\n"
+            "mct opensrc --fetch-metadata\n"
+            "```\n\n"
+            "Then fill `packages/*.md` using web/search against official sources only.\n"
+        )
+
+    print(json.dumps({
+        "ok": True,
+        "opensrc": str(opensrc),
+        "packages": len(manifest["packages"]),
+        "gitignore": "opensrc/",
+        "manifest": str(opensrc / "manifest.json"),
+    }, indent=2))
+    return 0
+
+
 def is_react_project(root: Path) -> bool:
     if any((root / name).exists() for name in ("next.config.js", "next.config.mjs", "next.config.ts")):
         return True
@@ -727,14 +876,7 @@ def command_verify(args: argparse.Namespace) -> int:
 
 
 def ensure_gitignore(root: Path) -> None:
-    path = root / ".gitignore"
-    entry = ".mct/"
-    if path.exists():
-        lines = path.read_text(errors="ignore").splitlines()
-        if entry not in lines:
-            path.write_text("\n".join(lines + [entry]) + "\n")
-    else:
-        path.write_text(entry + "\n")
+    ensure_gitignore_entries(root, [".mct/", "opensrc/"])
 
 
 def install_git_hook(root: Path, name: str) -> str:
@@ -778,6 +920,7 @@ def command_init(args: argparse.Namespace) -> int:
             if template.exists():
                 shutil.copy2(template, root / "TODO.md")
         result["gitignore"] = "updated"
+        result["opensrc"] = "available; run mct opensrc --fetch-metadata to initialize library context"
         result["preCommit"] = install_git_hook(root, "pre-commit")
         result["prePush"] = install_git_hook(root, "pre-push")
         if args.ci:
@@ -838,6 +981,12 @@ def main() -> int:
     classify.add_argument("--staged", action="store_true")
     classify.add_argument("files", nargs="*")
     classify.set_defaults(func=command_classify)
+
+    opensrc = sub.add_parser("opensrc")
+    opensrc.add_argument("--fetch-metadata", action="store_true", help="Fetch package metadata from npm registry")
+    opensrc.add_argument("--force", action="store_true", help="Overwrite existing package context stubs")
+    opensrc.add_argument("--limit", type=int)
+    opensrc.set_defaults(func=command_opensrc)
 
     verify = sub.add_parser("verify")
     verify.add_argument("--mode", choices=["pre-commit", "pre-push", "manual", "ci"], default="manual")

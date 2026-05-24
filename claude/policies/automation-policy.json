@@ -1,6 +1,6 @@
 {
   "name": "MCT automation policy",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "defaultMode": "balanced",
   "mctAliases": ["MCT", "mct", "my claude toolkit", "use MCT"],
   "todoQueue": {
@@ -27,6 +27,15 @@
     "commitAllByDefault": false,
     "messageStyle": "conventional-descriptive",
     "includeReceiptInBody": true
+  },
+  "opensrc": {
+    "enabled": true,
+    "directory": "opensrc",
+    "gitignore": true,
+    "firstMctStep": true,
+    "sourceOfTruthOnly": true,
+    "packageManagers": ["npm", "pnpm", "yarn"],
+    "metadataCommand": "mct opensrc --fetch-metadata"
   },
   "projectSignals": {
     "react": ["package.json", "src", "app", "pages"],

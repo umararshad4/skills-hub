@@ -1,0 +1,3 @@
+display_name: opensrc
+short_description: Build source-of-truth library context from package.json.
+default_prompt: Read package.json, initialize opensrc, and fill relevant library context from official docs/repos/npm using search.

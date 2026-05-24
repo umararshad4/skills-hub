@@ -14,6 +14,7 @@ Reusable AI engineering toolkit for Claude Code and other coding agents that can
 - Git hooks: `claude/git-hooks/`
 - Deterministic MCT CLI: `claude/bin/mct`
 - CI and project templates: `claude/templates/`
+- Source-of-truth library context workflow: `opensrc/` via `mct opensrc`
 
 ## Agent Compatibility
 
@@ -102,6 +103,7 @@ With GitHub Actions CI:
 
 ```bash
 ~/.claude/bin/mct status --md
+~/.claude/bin/mct opensrc --fetch-metadata
 ~/.claude/bin/mct next --claim
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ~/.claude/bin/mct verify --mode pre-commit
@@ -112,6 +114,7 @@ Repo-local form for non-Claude agents:
 
 ```bash
 ./claude/bin/mct status --md
+./claude/bin/mct opensrc --fetch-metadata
 ./claude/bin/mct next --claim
 ./claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ```
@@ -130,6 +133,27 @@ Example:
 
 MCT will classify tasks, choose sequential or safe parallel execution, require verification before completion, check off completed tasks, and optionally create descriptive commits.
 
+## opensrc Workflow
+
+For JavaScript/TypeScript projects, MCT can create a gitignored `opensrc/` directory from `package.json`:
+
+```bash
+~/.claude/bin/mct opensrc --fetch-metadata
+```
+
+This creates:
+
+```txt
+opensrc/
+  README.md
+  manifest.json
+  packages/
+```
+
+Agents should then use official source-of-truth docs, official repositories, npm package pages, or framework/vendor docs to fill only the library context relevant to the current task.
+
+`opensrc/` is local context and is added to `.gitignore`.
+
 ## Using MCT From Any Agent
 
 Prompt:
@@ -142,9 +166,10 @@ Expected behavior:
 
 1. Read `AGENTS.md`.
 2. Read `claude/MCT.md`.
-3. Run `mct status --md`.
-4. Run `mct next --claim`.
-5. Complete the selected TODO task.
-6. Run verification.
-7. Run `mct done "<task>" --check "<check>" --commit --all`.
-8. Continue to the next task or report blockers.
+3. If `package.json` exists, run `mct opensrc --fetch-metadata` and fill relevant library docs from official sources.
+4. Run `mct status --md`.
+5. Run `mct next --claim`.
+6. Complete the selected TODO task.
+7. Run verification.
+8. Run `mct done "<task>" --check "<check>" --commit --all`.
+9. Continue to the next task or report blockers.

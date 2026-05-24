@@ -5,15 +5,37 @@ MCT means: use this Claude toolkit as the operating system for the current task.
 When the user says `use MCT`, `MCT mode`, `run MCT`, or similar, Claude should:
 
 1. Inspect the project before deciding.
-2. Check for a root `TODO.md` file and treat it as the task queue when present.
-3. Classify the request, TODO items, dependencies, and changed surfaces.
-4. Select the right skills/subagents from this file.
-5. Choose sequential or parallel execution based on dependency risk.
-6. Use the smallest safe workflow.
-7. Run event-appropriate checks.
-8. Finish with a completion receipt and TODO status.
+2. If the project has `package.json`, initialize or refresh `opensrc/` context from source-of-truth library docs.
+3. Check for a root `TODO.md` file and treat it as the task queue when present.
+4. Classify the request, TODO items, dependencies, and changed surfaces.
+5. Select the right skills/subagents from this file.
+6. Choose sequential or parallel execution based on dependency risk.
+7. Use the smallest safe workflow.
+8. Run event-appropriate checks.
+9. Finish with a completion receipt and TODO status.
 
 MCT does not mean "run every tool." It means "route the work through the correct engineering loop."
+
+## opensrc Context
+
+At the start of MCT in JavaScript/TypeScript projects, read `package.json` and initialize `opensrc/`:
+
+```bash
+~/.claude/bin/mct opensrc --fetch-metadata
+```
+
+`opensrc/` is a gitignored local context directory for library and framework docs. It is not for dumping entire libraries or `node_modules`.
+
+Use it this way:
+
+1. Run the `mct opensrc` command.
+2. Read `opensrc/manifest.json`.
+3. Identify libraries relevant to the current task.
+4. Use web/search against official source-of-truth docs only: official docs, official repositories, npm package pages, or framework/vendor docs.
+5. Fill the relevant `opensrc/packages/*.md` files with concise API/pattern/version context.
+6. Use that context before planning or editing.
+
+Do not commit `opensrc/` unless the user explicitly asks.
 
 ## TODO.md Orchestration
 
@@ -125,6 +147,7 @@ Supported hints:
 
 | Situation | Use Skills | Use Subagents | Checks |
 | --- | --- | --- | --- |
+| Library/framework context needed | `opensrc`, plus task-specific skills | `planner` | official docs/source search, update `opensrc/` stubs |
 | New feature or behavior change | `frontend-architecture`, `ui-system`, Superpowers `brainstorming` for ambiguous/creative work | `planner`, then `frontend-implementer` | targeted tests, React Doctor if React changed |
 | TODO.md queue execution | `todo-orchestrator`, plus routed skills per item | `planner`, `frontend-implementer`, `reviewer`, parallel subagents only for independent items | per-item verification plus combined review |
 | Multi-step implementation from approved requirements | Superpowers `writing-plans`, `frontend-architecture` | `planner`, `frontend-implementer`, `test-runner` | task-level tests, typecheck if shared logic changed |
@@ -161,6 +184,7 @@ Use this when deciding how to respond to the user's wording.
 | --- | --- | --- |
 | Claude session start | Automatic Claude hook | Load `CLAUDE.md` and MCT context. |
 | User prompt submitted | Automatic Claude hook | Add MCT routing hints when the prompt says `MCT`. |
+| MCT prompt submitted and `package.json` exists | Required first workflow step | Run `mct opensrc --fetch-metadata`, then fill relevant library docs from official sources. |
 | MCT prompt submitted and `TODO.md` exists | Automatic Claude hook | Inject `TODO.md` preview and require TODO orchestration. |
 | Shell command | Automatic Claude hook | Block destructive commands unless explicitly approved. |
 | File edit | Automatic Claude hook | Run lightweight secret/sanity scan. |
@@ -182,6 +206,7 @@ Use the deterministic CLI when available:
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "..." --commit --all
 ~/.claude/bin/mct commit --task "<task-id-or-slug>" --all
 ~/.claude/bin/mct self-update
+~/.claude/bin/mct opensrc --fetch-metadata
 ~/.claude/bin/mct classify
 ~/.claude/bin/mct verify --mode pre-commit
 ~/.claude/bin/mct verify --mode pre-push
@@ -211,6 +236,7 @@ If the source repo is not in a standard location, set `MCT_SOURCE=/path/to/skill
 ## Skill Decision Rules
 
 - Use `frontend-architecture` whenever file ownership, boundaries, data flow, or route structure can be affected.
+- Use `opensrc` at the start of MCT in projects with `package.json`, and whenever external library docs/context matter.
 - Use `todo-orchestrator` whenever `TODO.md` exists and MCT is requested.
 - Use `ui-system` whenever visible UI changes.
 - Use `react-doctor` whenever React files changed or before committing React work.
