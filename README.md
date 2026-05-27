@@ -106,6 +106,7 @@ With GitHub Actions CI:
 
 ```bash
 ~/.claude/bin/mct status --md
+~/.claude/bin/mct start --md
 ~/.claude/bin/mct config --init
 ~/.claude/bin/mct opensrc --fetch-metadata
 ~/.claude/bin/mct audit --warn-only
@@ -123,6 +124,7 @@ Repo-local form for non-Claude agents:
 
 ```bash
 ./claude/bin/mct status --md
+./claude/bin/mct start --md
 ./claude/bin/mct config --init
 ./claude/bin/mct opensrc --fetch-metadata
 ./claude/bin/mct audit --warn-only
@@ -187,11 +189,14 @@ Expected behavior:
 
 1. Read `AGENTS.md`.
 2. Read `claude/MCT.md`.
-3. If `package.json` exists, run `mct opensrc --fetch-metadata` and fill relevant library docs from official sources.
-4. Run `mct status --md`.
-5. Run `mct next --claim`.
-6. Complete the selected TODO task.
-7. Run verification, using `mct browser-proof` for UI/browser work when useful.
-8. Run `mct done "<task>" --check "<check>" --commit --all`.
-9. Run `mct final-check --todo-log`.
-10. Continue to the next task or report blockers.
+3. Run `mct start --md` and treat the output as the activation checklist.
+4. Show a visible message in the terminal or agent UI: `MCT toolkit active`, followed by the current step.
+5. If `package.json` exists, run `mct opensrc --fetch-metadata` and confirm every declared package is represented in `opensrc/manifest.json`.
+6. Fill task-relevant library docs from official sources before planning or editing.
+7. Run `mct status --md`.
+8. Run `mct next --claim`.
+9. Complete the selected TODO task.
+10. Run verification, using `mct browser-proof` for UI/browser work when useful.
+11. Run `mct done "<task>" --check "<check>" --commit --all`.
+12. Run `mct final-check --todo-log`.
+13. Continue to the next task or report blockers.

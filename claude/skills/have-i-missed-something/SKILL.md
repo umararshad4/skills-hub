@@ -18,6 +18,7 @@ Run:
 Then check manually:
 
 - If `package.json` exists, was `opensrc/` initialized or refreshed?
+- Does `opensrc/manifest.json` cover every declared dependency and have a context file for each package?
 - Were relevant `opensrc/packages/*.md` files read or updated from official source-of-truth docs?
 - If `TODO.md` exists, was the next task selected with `mct next --claim`?
 - After each completed TODO, was `mct done` used to check it off?

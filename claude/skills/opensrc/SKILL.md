@@ -22,9 +22,10 @@ Create project-local library context in `opensrc/` so agents can work from real 
 
 3. Confirm `opensrc/` is listed in `.gitignore`.
 4. Read `opensrc/manifest.json`.
-5. For libraries relevant to the current task, use web/search to find official docs, official GitHub repos, npm package pages, framework docs, or vendor docs.
-6. Fill or update the matching `opensrc/packages/*.md` file with concise source-of-truth context.
-7. Use that context while planning and implementing.
+5. Confirm every declared dependency from `package.json` has a manifest entry and a matching `opensrc/packages/*.md` file.
+6. For libraries relevant to the current task, use web/search to find official docs, official GitHub repos, npm package pages, framework docs, or vendor docs.
+7. Fill or update the matching `opensrc/packages/*.md` file with concise source-of-truth context.
+8. Use that context while planning and implementing.
 
 ## Source Rules
 

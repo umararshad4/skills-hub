@@ -63,12 +63,14 @@ def opensrc_context(start: Path) -> str:
                 return (
                     "\n\n## opensrc Status\n\n"
                     f"Found package.json at `{package_json}` and opensrc manifest at `{manifest}`. "
-                    "Read opensrc/manifest.json and relevant opensrc/packages/*.md before planning."
+                    "Run `mct start --md`, read opensrc/manifest.json, verify that every declared package is represented, "
+                    "then read or fill task-relevant opensrc/packages/*.md files from official sources before planning."
                 )
             return (
                 "\n\n## opensrc Status\n\n"
                 f"Found package.json at `{package_json}` but no `opensrc/manifest.json`. "
-                "First run `mct opensrc --fetch-metadata`, then fill relevant package context from official source-of-truth docs before normal MCT task execution."
+                "First run `mct opensrc --fetch-metadata`, confirm every declared dependency is represented, "
+                "then fill task-relevant package context from official source-of-truth docs before normal MCT task execution."
             )
         if (path / ".git").exists():
             break
@@ -99,7 +101,20 @@ def main() -> int:
 
     cwd = payload_cwd(payload)
     todo = find_todo(cwd)
-    context = "The user requested MCT. Apply this routing guide:\n\n" + mct + opensrc_context(cwd) + todo_context(todo)
+    activation = (
+        "## MCT Activation Contract\n\n"
+        "The user explicitly requested MCT. Do not treat this as optional context and do not answer from memory. "
+        "Make MCT visible to the user: your first progress update should say `MCT toolkit active` and summarize the current step. "
+        "Before editing or giving a final answer, run or emulate these steps in order:\n\n"
+        "1. Read AGENTS.md plus README.md, claude/MCT.md, and claude/CLAUDE.md when present.\n"
+        "2. Run `mct start --md` when the CLI is available, otherwise manually apply the same checklist.\n"
+        "3. If package.json exists, run `mct opensrc --fetch-metadata` before planning, and ensure opensrc covers every declared package.\n"
+        "4. Deep-fill official source context for libraries relevant to the current task before editing.\n"
+        "5. If TODO.md exists, run `mct status --md` and `mct next --claim` before editing.\n"
+        "6. Run verification before `mct done`, record concrete checks or skipped-check reasons, then run `mct final-check --todo-log` before stopping.\n\n"
+        "If any step cannot run, state the exact blocker and continue with the closest manual equivalent.\n\n"
+    )
+    context = activation + "Apply this routing guide:\n\n" + mct + opensrc_context(cwd) + todo_context(todo)
 
     print(json.dumps({
         "hookSpecificOutput": {

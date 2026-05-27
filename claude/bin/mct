@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 DEFAULT_POLICY = {
     "todoQueue": {
         "fileName": "TODO.md",
@@ -677,6 +677,48 @@ def status_data(root: Path) -> dict:
     }
 
 
+def load_opensrc_manifest(root: Path) -> dict:
+    path = root / "opensrc" / "manifest.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def opensrc_package_coverage(root: Path) -> dict:
+    deps = package_dependencies(root)
+    manifest = load_opensrc_manifest(root)
+    packages = manifest.get("packages", []) if isinstance(manifest, dict) else []
+    package_by_name = {
+        item.get("name"): item
+        for item in packages
+        if isinstance(item, dict) and item.get("name")
+    }
+    missing_context_files = []
+    stub_context_files = []
+
+    for name, item in sorted(package_by_name.items()):
+        context_file = item.get("contextFile") or f"packages/{safe_package_filename(name)}.md"
+        path = root / "opensrc" / context_file
+        if not path.exists():
+            missing_context_files.append(name)
+            continue
+        text = path.read_text(errors="ignore")
+        if re.search(r"(?m)^- Pending\.\s*$", text):
+            stub_context_files.append(name)
+
+    return {
+        "declaredPackages": sorted(deps),
+        "manifestPackages": sorted(package_by_name),
+        "missingPackages": sorted(set(deps) - set(package_by_name)),
+        "extraPackages": sorted(set(package_by_name) - set(deps)),
+        "missingContextFiles": missing_context_files,
+        "stubContextFiles": stub_context_files,
+    }
+
+
 def render_status_md(data: dict) -> str:
     tasks = data["tasks"]
     open_tasks = [task for task in tasks if not task["done"]]
@@ -740,6 +782,62 @@ def command_plan(args: argparse.Namespace) -> int:
             "Write a receipt with mct receipt after each completed item or batch.",
         ],
     }, indent=2))
+    return 0
+
+
+def command_start(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    data = status_data(root)
+    coverage = opensrc_package_coverage(root) if data["packageJson"] else {}
+    required_steps = [
+        "Read AGENTS.md, README.md, claude/MCT.md, and claude/CLAUDE.md when present.",
+        "Inspect project state before editing.",
+        "If package.json exists, run mct opensrc --fetch-metadata before normal planning.",
+        "Read opensrc/manifest.json and ensure every declared package has a context file.",
+        "Deep-fill official source context for task-relevant libraries before editing.",
+        "If TODO.md exists, run mct status --md and mct next --claim before editing.",
+        "Route work through the matching skills/subagents/checks for the changed surfaces.",
+        "Run verification before mct done, then record concrete checks or skipped-check reasons.",
+        "Run mct final-check --todo-log before final response.",
+    ]
+    payload = {
+        "root": data["root"],
+        "mctActivation": "required",
+        "packageJson": data["packageJson"],
+        "opensrc": data["opensrc"],
+        "opensrcCoverage": coverage,
+        "todo": data["todo"],
+        "next": data["plan"].get("next", []),
+        "recommendedChecks": data["recommendedChecks"],
+        "requiredFirstSteps": required_steps,
+    }
+    if args.md:
+        print("# MCT Toolkit Active\n")
+        print(f"- Root: `{payload['root']}`")
+        print(f"- package.json: `{payload['packageJson']}`" if payload["packageJson"] else "- package.json: not found")
+        print(f"- opensrc manifest: `{payload['opensrc']['manifest']}`" if payload["opensrc"]["manifest"] else "- opensrc manifest: not initialized")
+        if coverage:
+            print(f"- opensrc package coverage: {len(coverage['manifestPackages'])}/{len(coverage['declaredPackages'])} declared packages in manifest")
+            if coverage["missingPackages"]:
+                print(f"- missing opensrc packages: {', '.join(coverage['missingPackages'])}")
+            if coverage["missingContextFiles"]:
+                print(f"- missing opensrc context files: {', '.join(coverage['missingContextFiles'])}")
+            if coverage["stubContextFiles"]:
+                print(f"- stub opensrc context files: {len(coverage['stubContextFiles'])}")
+        print(f"- TODO.md: `{payload['todo']}`" if payload["todo"] else "- TODO.md: not found")
+        print("\n## Execution Trace")
+        for index, step in enumerate(required_steps, start=1):
+            print(f"{index}. {step}")
+        print("\n## Visible Agent Message")
+        print("MCT toolkit active. I will inspect, refresh opensrc when package.json exists, route through TODO.md when present, verify before completion, and run final audit before stopping.")
+        print("\n## Next")
+        if payload["next"]:
+            for task in payload["next"]:
+                print(f"- `{task['id']}`: {task['clean_text']}")
+        else:
+            print("- No runnable TODO task found.")
+        return 0
+    print(json.dumps(payload, indent=2))
     return 0
 
 
@@ -1165,6 +1263,7 @@ def command_opensrc(args: argparse.Namespace) -> int:
     manifest = {
         "generatedAt": now(),
         "root": str(root),
+        "packageJsonSha256": sha256_file(root / "package.json") if (root / "package.json").exists() else None,
         "sourcePolicy": "Use official source-of-truth docs/repos only. Fill package files using web/search against official docs, GitHub repos, npm package pages, or framework docs.",
         "packages": [],
     }
@@ -1268,6 +1367,29 @@ def command_audit(args: argparse.Namespace) -> int:
             "code": "opensrc-missing",
             "message": "package.json exists but opensrc/manifest.json is missing. Run mct opensrc --fetch-metadata before normal MCT work.",
         })
+    elif data["packageJson"]:
+        coverage = opensrc_package_coverage(root)
+        if coverage["missingPackages"]:
+            issues.append({
+                "severity": "high",
+                "code": "opensrc-incomplete-package-coverage",
+                "message": "opensrc/manifest.json does not cover every declared package: " + ", ".join(coverage["missingPackages"]),
+            })
+        if coverage["missingContextFiles"]:
+            issues.append({
+                "severity": "high",
+                "code": "opensrc-context-files-missing",
+                "message": "opensrc package entries are missing context files: " + ", ".join(coverage["missingContextFiles"]),
+            })
+        if coverage["stubContextFiles"]:
+            preview = ", ".join(coverage["stubContextFiles"][:12])
+            remaining = len(coverage["stubContextFiles"]) - 12
+            suffix = "" if remaining <= 0 else f" and {remaining} more"
+            issues.append({
+                "severity": "medium",
+                "code": "opensrc-context-still-stubbed",
+                "message": "opensrc context files still contain stub placeholders. Fill task-relevant official docs before editing; remaining stubs: " + preview + suffix,
+            })
 
     open_tasks = [task for task in data["tasks"] if not task["done"]]
     if data["todo"] and open_tasks and not data["plan"].get("next"):
@@ -1372,7 +1494,9 @@ def command_audit(args: argparse.Namespace) -> int:
         "root": data["root"],
         "issues": issues,
         "requiredBeforeFinal": [
+            "mct start/status used when MCT is requested",
             "opensrc initialized when package.json exists",
+            "opensrc manifest covers every declared package from package.json",
             "TODO items checked off with mct done only after verification",
             "Playwright/Chrome/browser check recorded for UI tasks with URL/viewport/test/screenshot evidence when possible",
             "checks/skipped-checks/risks included in final response",
@@ -1550,6 +1674,10 @@ def main() -> int:
     status = sub.add_parser("status")
     status.add_argument("--md", action="store_true")
     status.set_defaults(func=command_status)
+
+    start = sub.add_parser("start")
+    start.add_argument("--md", action="store_true")
+    start.set_defaults(func=command_start)
 
     sub.add_parser("plan").set_defaults(func=command_plan)
 

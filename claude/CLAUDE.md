@@ -14,13 +14,15 @@ This is the global operating guide for Claude Code sessions.
 ## Default Engineering Loop
 
 1. Understand the request and inspect the repo before changing code.
-2. If MCT is requested and root `TODO.md` exists, read it as the task queue before planning.
-3. If MCT is requested and `package.json` exists, initialize or refresh `opensrc/` before normal planning.
-4. Plan the smallest safe change that satisfies the goal.
-5. Implement within the existing architecture.
-6. Run targeted checks based on what changed.
-7. Run `mct audit --warn-only` before the final response.
-8. Summarize changed files, opensrc status, TODO status if relevant, checks run, skipped checks with reasons, and remaining risks.
+2. If MCT is requested, run `mct start --md` or manually apply the same activation checklist before planning.
+3. If MCT is requested, make it visible in the terminal or agent UI by saying `MCT toolkit active` and naming the current step.
+4. If MCT is requested and root `TODO.md` exists, read it as the task queue before planning.
+5. If MCT is requested and `package.json` exists, initialize or refresh `opensrc/` for every declared package before normal planning.
+6. Plan the smallest safe change that satisfies the goal.
+7. Implement within the existing architecture.
+8. Run targeted checks based on what changed.
+9. Run `mct audit --warn-only` before the final response.
+10. Summarize changed files, opensrc status, TODO status if relevant, checks run, skipped checks with reasons, and remaining risks.
 
 ## Decision Policy
 

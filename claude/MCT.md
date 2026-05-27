@@ -4,16 +4,19 @@ MCT means: use this Claude toolkit as the operating system for the current task.
 
 When the user says `use MCT`, `MCT mode`, `run MCT`, or similar, Claude should:
 
-1. Inspect the project before deciding.
-2. If the project has `package.json`, initialize or refresh `opensrc/` context from source-of-truth library docs.
-3. Check for a root `TODO.md` file and treat it as the task queue when present.
-4. Classify the request, TODO items, dependencies, and changed surfaces.
-5. Select the right skills/subagents from this file.
-6. Choose sequential or parallel execution based on dependency risk.
-7. Use the smallest safe workflow.
-8. Run event-appropriate checks.
-9. Run `mct audit --warn-only` and the `have-i-missed-something` skill.
-10. Finish with a completion receipt and TODO status.
+1. Run `mct start --md` when the CLI is available, or manually apply the same activation checklist.
+2. Make activation visible in the terminal or agent UI: say `MCT toolkit active` and name the current orchestration step.
+3. Inspect the project before deciding.
+4. If the project has `package.json`, initialize or refresh `opensrc/` context for every declared package.
+5. Fill task-relevant `opensrc/packages/*.md` files from source-of-truth library docs before planning or editing.
+6. Check for a root `TODO.md` file and treat it as the task queue when present.
+7. Classify the request, TODO items, dependencies, and changed surfaces.
+8. Select the right skills/subagents from this file.
+9. Choose sequential or parallel execution based on dependency risk.
+10. Use the smallest safe workflow.
+11. Run event-appropriate checks.
+12. Run `mct audit --warn-only` and the `have-i-missed-something` skill.
+13. Finish with a completion receipt and TODO status.
 
 MCT does not mean "run every tool." It means "route the work through the correct engineering loop."
 
@@ -44,10 +47,11 @@ Use it this way:
 
 1. Run the `mct opensrc` command.
 2. Read `opensrc/manifest.json`.
-3. Identify libraries relevant to the current task.
-4. Use web/search against official source-of-truth docs only: official docs, official repositories, npm package pages, or framework/vendor docs.
-5. Fill the relevant `opensrc/packages/*.md` files with concise API/pattern/version context.
-6. Use that context before planning or editing.
+3. Confirm the manifest covers every declared dependency from `package.json`; `mct audit` flags missing packages or context files.
+4. Identify libraries relevant to the current task.
+5. Use web/search against official source-of-truth docs only: official docs, official repositories, npm package pages, or framework/vendor docs.
+6. Fill the relevant `opensrc/packages/*.md` files with concise API/pattern/version context.
+7. Use that context before planning or editing.
 
 Do not commit `opensrc/` unless the user explicitly asks.
 
@@ -210,7 +214,7 @@ Use this when deciding how to respond to the user's wording.
 | --- | --- | --- |
 | Claude session start | Automatic Claude hook | Load `CLAUDE.md` and MCT context. |
 | User prompt submitted | Automatic Claude hook | Add MCT routing hints when the prompt says `MCT`. |
-| MCT prompt submitted and `package.json` exists | Required first workflow step | Run `mct opensrc --fetch-metadata`, then fill relevant library docs from official sources. |
+| MCT prompt submitted and `package.json` exists | Required first workflow step | Run `mct opensrc --fetch-metadata`, confirm manifest coverage for every declared package, then fill task-relevant library docs from official sources. |
 | MCT prompt submitted and `TODO.md` exists | Automatic Claude hook | Inject `TODO.md` preview and require TODO orchestration. |
 | Shell command | Automatic Claude hook | Block destructive commands unless explicitly approved. |
 | File edit | Automatic Claude hook | Run lightweight secret/sanity scan. |

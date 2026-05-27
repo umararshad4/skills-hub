@@ -18,16 +18,19 @@ MCT means "My Claude Toolkit", but non-Claude agents should treat it as a genera
 
 When the user says `use MCT`, `MCT mode`, `run MCT`, or similar:
 
-1. Inspect the project before editing.
-2. If `package.json` exists, initialize or refresh `opensrc/` and use official source-of-truth library docs for relevant dependencies.
-3. Look for a root `TODO.md`.
-4. If `TODO.md` exists, run or emulate `mct status`, `mct next`, `mct done`, and `mct verify` behavior.
-5. Route work through the relevant skill guidance under `claude/skills/`.
-6. Run verification before marking TODO items done.
-7. Mark completed TODO items with `[x]`.
-8. Create a descriptive commit after each verified TODO item when requested by the workflow.
-9. Run `mct audit --warn-only` or manually apply the same audit.
-10. Finish with opensrc status, completed/open/blocked TODO items, checks run, skipped checks, commits, and risks.
+1. Run or emulate `mct start --md` first; this is the activation checklist, not optional context.
+2. Make activation visible in the terminal or agent UI: say `MCT toolkit active` and name the current orchestration step.
+3. Inspect the project before editing.
+4. If `package.json` exists, initialize or refresh `opensrc/` for every declared package.
+5. Use official source-of-truth library docs for task-relevant dependencies before planning or editing.
+6. Look for a root `TODO.md`.
+7. If `TODO.md` exists, run or emulate `mct status`, `mct next`, `mct done`, and `mct verify` behavior.
+8. Route work through the relevant skill guidance under `claude/skills/`.
+9. Run verification before marking TODO items done.
+10. Mark completed TODO items with `[x]`.
+11. Create a descriptive commit after each verified TODO item when requested by the workflow.
+12. Run `mct audit --warn-only` or manually apply the same audit.
+13. Finish with opensrc status, completed/open/blocked TODO items, checks run, skipped checks, commits, and risks.
 
 ## CLI
 
@@ -35,6 +38,7 @@ If installed, use:
 
 ```bash
 ~/.claude/bin/mct status --md
+~/.claude/bin/mct start --md
 ~/.claude/bin/mct config --init
 ~/.claude/bin/mct opensrc --fetch-metadata
 ~/.claude/bin/mct audit --warn-only
@@ -76,7 +80,8 @@ If the CLI is not installed, use the repo-local CLI:
 ## opensrc Rules
 
 - `opensrc/` is local, gitignored source-of-truth library context.
-- Build it from the target project's `package.json`.
+- Build it from every declared dependency in the target project's `package.json`.
+- `opensrc/manifest.json` must cover all declared packages; task-relevant package files should be filled from official sources before editing.
 - Use official docs, official repos, npm package pages, or framework/vendor docs.
 - Do not use random blog posts as authoritative context.
 - Do not commit `opensrc/` unless explicitly requested.
