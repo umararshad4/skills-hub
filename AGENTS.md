@@ -14,7 +14,7 @@ Treat `claude/MCT.md` as the source of truth for orchestration.
 
 ## What MCT Means
 
-MCT means "My Claude Toolkit", but non-Claude agents should treat it as a general engineering orchestration system.
+MCT means "My Claude Toolkit", but non-Claude agents should treat it as a general engineering orchestration system. It is human-in-the-loop discipline tooling, not a self-driving agent: the `mct` CLI, git hooks, and command guard enforce real guarantees with exit codes, while the routing/skills/loop below are advisory. See the "What Is Enforced vs Advisory" section in `README.md`.
 
 When the user says `use MCT`, `MCT mode`, `run MCT`, or similar:
 

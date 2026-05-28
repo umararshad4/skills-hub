@@ -2,6 +2,35 @@
 
 Reusable AI engineering toolkit for Claude Code and other coding agents that can read repo instructions such as `AGENTS.md`.
 
+It is a **deterministic, human-in-the-loop engineering-discipline toolkit**, not a self-driving
+autonomous agent. The `mct` CLI, the git hooks, and the dangerous-command guard enforce real
+guarantees with code and exit codes; the skills, subagents, commands, and `MCT.md` routing are
+guidance an agent chooses to follow. Be clear-eyed about which is which:
+
+## What Is Enforced vs Advisory
+
+**Enforced (deterministic code — works regardless of which agent, or no agent):**
+
+- `mct done` refuses to complete a task unless its required checks are genuinely satisfied:
+  deterministic checks (typecheck/test/react-doctor) must be **executed** via `mct run-check`
+  (real exit codes), browser proof needs a **real artifact** (an existing, non-empty, valid image),
+  and other checks need an explicit named attestation or an explicit `name=reason` skip. Fabricated
+  evidence strings and keyword blobs are rejected (see `scripts/redteam.sh`).
+- `mct verify` (wired to the git hooks) runs secret scanning, React Doctor, and typecheck and
+  returns a non-zero exit code on failure. The git hooks **fail closed** when the binary is missing
+  (set `MCT_ALLOW_MISSING=1` to bypass intentionally). Run `mct doctor` to see if they are wired.
+- `mct audit --strict` exits non-zero on any high-severity issue; CI runs the full
+  `scripts/check.sh` gate (unit tests + red-team probes + strict audit).
+- The dangerous-command guard blocks destructive shell commands (recursive-force deletes of
+  absolute/home/root paths, `mkfs`, `dd` to a device, `find / -delete`, fork bombs, destructive
+  `git`, …) by parsing the actual command, not substring-matching text.
+- State writes are atomic; `mct next --claim` records and respects task claims.
+
+**Advisory (prose an agent may or may not follow):** the `CLAUDE.md`/`MCT.md` engineering loop,
+skill selection and routing, the activation contract injected by the prompt hook, and the
+subagent role prompts. These shape behavior but are not enforced by code. There is no autonomous
+control loop, scheduler, or multi-agent dispatcher — a human or agent drives each step.
+
 ## What Is Included
 
 - Cross-agent instructions: `AGENTS.md`

@@ -2,6 +2,11 @@
 
 MCT means: use this Claude toolkit as the operating system for the current task.
 
+> Enforced vs advisory: the steps in this guide are advisory — they shape how an agent works but
+> are not guaranteed by code. The real, code-enforced guarantees live in the `mct` CLI (`done`,
+> `verify`, `audit --strict`, `run-check`), the git hooks (fail closed), and the dangerous-command
+> guard. See the "What Is Enforced vs Advisory" section of `README.md`.
+
 When the user says `use MCT`, `MCT mode`, `run MCT`, or similar, Claude should:
 
 1. Run `mct start --md` when the CLI is available, or manually apply the same activation checklist.

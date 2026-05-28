@@ -65,5 +65,10 @@ test suite and red-team regression probes proving the gates cannot be faked.
 - Dependency resolution matches unambiguous bare tokens (slug words / tags), so
   mutually dependent tasks form a real, cycle-detectable edge.
 
+- README documents a "What Is Enforced vs Advisory" section that states real
+  (code-enforced) guarantees vs advisory guidance, and clarifies that MCT is
+  human-in-the-loop discipline tooling, not a self-driving autonomous agent.
+  AGENTS.md and MCT.md point to it.
+
 ### Notes
 - `VERSION` bumped to `2.0.0`.

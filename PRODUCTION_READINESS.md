@@ -105,10 +105,10 @@ checked AND `bash scripts/check.sh` exits 0, with the full output pasted as proo
 - Verify: unit test simulating commit failure → checkbox NOT flipped, state consistent.
 
 ### AC9 — Honest docs + versioning
-- [ ] README / AGENTS.md / MCT.md updated with an "Enforced vs Advisory" section that states real
+- [x] README / AGENTS.md / MCT.md updated with an "Enforced vs Advisory" section that states real
       guarantees honestly; remove/qualify the unqualified "autonomous orchestration" claim.
-- [ ] `CHANGELOG.md` added and kept updated per criterion.
-- [ ] `VERSION` in `claude/bin/mct` bumped (>= 2.0.0).
+- [x] `CHANGELOG.md` added and kept updated per criterion.
+- [x] `VERSION` in `claude/bin/mct` bumped (>= 2.0.0).
 - Verify: docs contain the "Enforced vs Advisory" section; CHANGELOG present; version bumped.
 
 ### AC10 — One-command check + CI + strict audit
@@ -139,3 +139,4 @@ _The loop appends a one-line note per iteration: which AC advanced and the verif
 - AC4: git hooks now fail closed (MCT_ALLOW_MISSING=1 to bypass); added mct doctor; run_package_script warns + records skipped. 86 tests green.
 - AC6: logging on stderr (MCT_DEBUG=1 for debug); all 10 except blocks now log; corrupt state/config emit warnings. 88 tests green.
 - AC7: malformed/empty TODO lines warn instead of silently dropping; dependency resolver matches unambiguous bare tokens so mutual deps form cycle-detectable edges. 92 tests green.
+- AC9: added 'What Is Enforced vs Advisory' to README (+ pointers in AGENTS.md/MCT.md); CHANGELOG maintained; VERSION 2.0.0.
