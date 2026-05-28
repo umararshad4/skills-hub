@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 # Observability: warnings are surfaced on stderr (never stdout, which carries the
 # machine-readable JSON). Set MCT_DEBUG=1 for verbose/debug output.
@@ -104,10 +104,11 @@ def load_policy() -> dict:
     if not policy_path.exists():
         return DEFAULT_POLICY
     try:
-        return json.loads(policy_path.read_text())
+        data = json.loads(policy_path.read_text())
     except Exception as exc:
         logger.warning("could not parse automation-policy.json; using defaults: %s", exc)
         return DEFAULT_POLICY
+    return data if isinstance(data, dict) else DEFAULT_POLICY
 
 
 def detect_stack(root: Path) -> dict:
@@ -160,6 +161,9 @@ def load_config(root: Path) -> dict:
     except Exception as exc:
         logger.warning("could not parse .mct/config.json; using defaults: %s", exc)
         return default_config(root)
+    if not isinstance(config, dict):
+        logger.warning(".mct/config.json is not a JSON object; using defaults")
+        return default_config(root)
     base = default_config(root)
     for key, value in base.items():
         config.setdefault(key, value)
@@ -205,6 +209,9 @@ def load_state(root: Path) -> dict:
     except Exception as exc:
         logger.warning("could not parse .mct/state.json; using defaults: %s", exc)
         return default_state()
+    if not isinstance(state, dict):
+        logger.warning(".mct/state.json is not a JSON object; using defaults")
+        return default_state()
     state.setdefault("version", VERSION)
     state.setdefault("tasks", {})
     state.setdefault("runs", [])
@@ -212,15 +219,18 @@ def load_state(root: Path) -> dict:
     return state
 
 
-def save_state(root: Path, state: dict) -> None:
-    path = state_path(root)
+def save_json_atomic(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Serialize first so a serialization error never truncates the live file,
-    # then swap atomically so a crash mid-write cannot leave a partial state.json.
-    payload = json.dumps(state, indent=2, sort_keys=True) + "\n"
+    # then swap atomically so a crash mid-write cannot leave a partial file.
+    payload = json.dumps(data, indent=2, sort_keys=True) + "\n"
     tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
     tmp.write_text(payload)
     os.replace(tmp, path)
+
+
+def save_state(root: Path, state: dict) -> None:
+    save_json_atomic(state_path(root), state)
 
 
 def clean_task_text(text: str) -> str:
@@ -365,8 +375,13 @@ def dependency_analysis(tasks: list[TodoTask]) -> dict:
         visiting.remove(node)
         visited.add(node)
 
-    for task_id_value in graph:
-        visit(task_id_value)
+    try:
+        for task_id_value in graph:
+            visit(task_id_value)
+    except RecursionError:
+        # Pathologically deep dependency chain — don't crash the CLI; report it.
+        logger.warning("dependency graph too deep to fully analyze; cycle detection truncated")
+        cycles.append(["<recursion-limit-exceeded>"])
 
     return {"graph": graph, "missing": missing, "cycles": cycles}
 
@@ -630,6 +645,14 @@ def parse_skip_token(item: str) -> tuple[str, str]:
     return parse_check_token(item)
 
 
+def is_substantive_reason(text: str) -> bool:
+    """A real attestation/skip reason is a short phrase, not 'x' or 'ok'. This
+    rejects trivially-degenerate detail; it cannot (and does not claim to) verify
+    the reason is TRUE — non-executable self-reports remain honor-based."""
+    text = (text or "").strip()
+    return len(text) >= 8 and " " in text
+
+
 def requirement_satisfied(
     required: str,
     provided: list[tuple[str, str]],
@@ -640,8 +663,8 @@ def requirement_satisfied(
     # An executed, passing check is always sufficient.
     if any(entry.get("name") == required and entry.get("result") == "pass" for entry in executed):
         return True
-    # An explicit, named skip carrying a concrete reason.
-    if any(name == required and reason for name, reason in skips):
+    # An explicit, named skip carrying a concrete, substantive reason.
+    if any(name == required and is_substantive_reason(reason) for name, reason in skips):
         return True
     # Browser proof is satisfied only by a real artifact (verified separately),
     # never by a free-text evidence string.
@@ -651,8 +674,8 @@ def requirement_satisfied(
     if required in AUTO_EXECUTABLE_CHECKS:
         return False
     # Other checks (negative-path-check, api-behavior-check, diff-review) accept an
-    # explicit, named self-report that carries concrete detail.
-    return any(name == required and detail for name, detail in provided)
+    # explicit, named self-report carrying a substantive (multi-word) attestation.
+    return any(name == required and is_substantive_reason(detail) for name, detail in provided)
 
 
 def unmet_required_checks(
@@ -781,6 +804,7 @@ def is_valid_image(path: Path) -> bool:
 # (e.g. a hand-painted 1x1 PNG) that carry no real visual evidence.
 MIN_SCREENSHOT_DIM = 64
 MIN_SCREENSHOT_BYTES = 1024
+MIN_PROOF_BYTES = 32  # a 1-byte "proof" file is not evidence
 
 
 def image_dimensions(path: Path) -> tuple[int, int] | None:
@@ -800,16 +824,29 @@ def image_dimensions(path: Path) -> tuple[int, int] | None:
 
 
 def screenshot_is_substantive(path: Path) -> tuple[bool, str]:
-    """A real screenshot must be reasonably sized. Use dimensions when we can
-    parse them, otherwise fall back to a byte-size floor."""
+    """Reject degenerate/forged screenshots. A valid magic number is not enough:
+    a forged header with no pixel data (e.g. a 33-byte PNG carrying a fake
+    1920x1080 IHDR and no IDAT) must fail. We check format integrity, then
+    dimensions, then a byte floor for formats whose dimensions we can't read."""
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return False, "screenshot artifact is unreadable"
+    # Format integrity — a header without real image data is a forgery.
+    if raw.startswith(b"\x89PNG\r\n\x1a\n") and b"IDAT" not in raw:
+        return False, "screenshot PNG has no image data (IDAT chunk) — forged header"
+    if raw.startswith(b"\xff\xd8\xff") and not raw.rstrip(b"\x00").endswith(b"\xff\xd9"):
+        return False, "screenshot JPEG has no end-of-image marker — truncated/forged"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP" and int.from_bytes(raw[4:8], "little") != len(raw) - 8:
+        return False, "screenshot WEBP RIFF size mismatch — forged"
     dims = image_dimensions(path)
     if dims is not None:
         width, height = dims
         if min(width, height) < MIN_SCREENSHOT_DIM:
             return False, f"screenshot is too small ({width}x{height}; need >= {MIN_SCREENSHOT_DIM}px each side)"
         return True, ""
-    if path.stat().st_size < MIN_SCREENSHOT_BYTES:
-        return False, f"screenshot is too small ({path.stat().st_size} bytes; need >= {MIN_SCREENSHOT_BYTES})"
+    if len(raw) < MIN_SCREENSHOT_BYTES:
+        return False, f"screenshot is too small ({len(raw)} bytes; need >= {MIN_SCREENSHOT_BYTES})"
     return True, ""
 
 
@@ -841,8 +878,8 @@ def browser_artifact_ok(root: Path, evidence: list[dict]) -> tuple[bool, str]:
             path = resolve_artifact(root, proof)
             if not path.exists():
                 return False, f"browser proof artifact is missing: {proof}"
-            if path.stat().st_size == 0:
-                return False, f"browser proof artifact is empty: {proof}"
+            if path.stat().st_size < MIN_PROOF_BYTES:
+                return False, f"browser proof artifact is too small ({path.stat().st_size} bytes; need >= {MIN_PROOF_BYTES})"
             found = True
     if not found:
         return False, "browser evidence references no real artifact (need screenshot= or proof= pointing to an existing file)"
@@ -956,10 +993,11 @@ def load_opensrc_manifest(root: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
     except Exception as exc:
         logger.debug("could not parse JSON file; using empty result: %s", exc)
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def opensrc_package_coverage(root: Path) -> dict:
@@ -1381,6 +1419,99 @@ def command_run_check(args: argparse.Namespace) -> int:
     return rc
 
 
+class CompletionBlocked(Exception):
+    """Raised when a task cannot be honestly marked complete (gate unsatisfied or
+    commit failed). Carries the human-facing reason. command_done converts it to
+    SystemExit; the autonomous loop catches it to roll back and retry/block."""
+
+
+def complete_task(
+    root: Path,
+    todo_path: Path,
+    task: TodoTask,
+    *,
+    checks: list[str] | None,
+    skipped: list[str] | None,
+    browser_evidence: list[str] | None,
+    executed_results: list[dict],
+    summary: str = "",
+    risk: list[str] | None = None,
+    commit: bool = False,
+    all_: bool = False,
+    message: str | None = None,
+    allow_no_commit: bool = False,
+) -> dict:
+    """The single verified completion gate, shared by `mct done` and `mct run`.
+
+    Raises CompletionBlocked if required checks are unsatisfied or a requested
+    commit fails. Only on success does it flip the checkbox, write the receipt,
+    and persist state — and it commits BEFORE flipping so a failed commit never
+    leaves a done-but-uncommitted TODO.
+    """
+    evidence = parse_browser_evidence(browser_evidence)
+    artifact_ok, artifact_reason = False, ""
+    if evidence:
+        shape_ok, shape_reason = valid_browser_evidence(browser_evidence)
+        if shape_ok:
+            artifact_ok, artifact_reason = browser_artifact_ok(root, evidence)
+        else:
+            artifact_reason = shape_reason
+
+    unmet = unmet_required_checks(task, root, checks, skipped, executed_results, artifact_ok)
+    if unmet:
+        raise CompletionBlocked(unmet_checks_message(unmet, artifact_reason))
+
+    receipt = {
+        "at": now(),
+        "summary": summary or f"completed {task.clean_text}",
+        "completedTasks": [task.id],
+        "checksRun": checks or [],
+        "checksSkipped": skipped or [],
+        "executedChecks": executed_results,
+        "browserEvidence": evidence,
+        "risks": risk or [],
+        "changedFiles": git_files(root),
+        "stagedFiles": git_files(root, staged=True),
+    }
+
+    commit_result = None
+    commit_payload = None
+    if commit:
+        subject = message or commit_subject(task, summary)
+        body = commit_body(task, checks or [], skipped or [], None)
+        commit_result = git_commit(root, subject, body, all_)
+        if commit_result.get("ok"):
+            commit_payload = {"commit": {"sha": commit_result.get("sha"), "subject": commit_result.get("subject")}}
+        elif not allow_no_commit:
+            raise CompletionBlocked(
+                "commit failed; TODO left unchanged: "
+                + (commit_result.get("reason") or commit_result.get("stderr") or "unknown error")
+            )
+
+    if not task.done:
+        update_todo_checkbox(todo_path, task.line)
+    if commit_payload:
+        receipt.update(commit_payload)
+    receipt_path = append_receipt(root, receipt)
+    state = load_state(root)
+    task_state = state.setdefault("tasks", {}).setdefault(task.id, {})
+    task_state.update({
+        "status": "done",
+        "completedAt": now(),
+        "text": task.clean_text,
+        "checks": checks or [],
+        "executedChecks": executed_results,
+        "browserEvidence": evidence,
+    })
+    if commit_payload:
+        task_state["commit"] = commit_payload["commit"]
+        for run_item in state.get("runs", []):
+            if run_item.get("receipt") == str(receipt_path.relative_to(root)):
+                run_item["commit"] = commit_payload["commit"]
+    save_state(root, state)
+    return {"done": asdict(task), "todoUpdated": str(todo_path), "receipt": str(receipt_path), "commit": commit_result}
+
+
 def command_done(args: argparse.Namespace) -> int:
     root = find_root(Path.cwd())
     has_input = bool(args.check or args.skipped_check or args.browser_evidence or getattr(args, "run_check", None))
@@ -1409,73 +1540,16 @@ def command_done(args: argparse.Namespace) -> int:
             + ", ".join(f"{r['name']} (exit {r.get('exitCode')})" for r in failed)
         )
 
-    # Browser proof must reference a real artifact, not just a formatted string.
-    evidence = parse_browser_evidence(args.browser_evidence)
-    artifact_ok, artifact_reason = False, ""
-    if evidence:
-        shape_ok, shape_reason = valid_browser_evidence(args.browser_evidence)
-        if shape_ok:
-            artifact_ok, artifact_reason = browser_artifact_ok(root, evidence)
-        else:
-            artifact_reason = shape_reason
-
-    unmet = unmet_required_checks(task, root, args.check, args.skipped_check, executed_results, artifact_ok)
-    if unmet:
-        raise SystemExit(unmet_checks_message(unmet, artifact_reason))
-
-    receipt = {
-        "at": now(),
-        "summary": args.summary or f"completed {task.clean_text}",
-        "completedTasks": [task.id],
-        "checksRun": args.check or [],
-        "checksSkipped": args.skipped_check or [],
-        "executedChecks": executed_results,
-        "browserEvidence": evidence,
-        "risks": args.risk or [],
-        "changedFiles": git_files(root),
-        "stagedFiles": git_files(root, staged=True),
-    }
-
-    # Commit BEFORE flipping the checkbox so a failed commit never leaves the
-    # TODO marked done-but-uncommitted.
-    commit_result = None
-    commit_payload = None
-    if args.commit:
-        subject = args.message or commit_subject(task, args.summary)
-        body = commit_body(task, args.check or [], args.skipped_check or [], None)
-        commit_result = git_commit(root, subject, body, args.all)
-        if commit_result.get("ok"):
-            commit_payload = {"commit": {"sha": commit_result.get("sha"), "subject": commit_result.get("subject")}}
-        elif not args.allow_no_commit:
-            raise SystemExit(
-                "commit failed; TODO left unchanged: "
-                + (commit_result.get("reason") or commit_result.get("stderr") or "unknown error")
-            )
-
-    # The task is genuinely complete past this point: flip the checkbox, write the
-    # receipt, and persist state.
-    if not task.done:
-        update_todo_checkbox(todo_path, task.line)
-    if commit_payload:
-        receipt.update(commit_payload)
-    receipt_path = append_receipt(root, receipt)
-    state = load_state(root)
-    task_state = state.setdefault("tasks", {}).setdefault(task.id, {})
-    task_state.update({
-        "status": "done",
-        "completedAt": now(),
-        "text": task.clean_text,
-        "checks": args.check or [],
-        "executedChecks": executed_results,
-        "browserEvidence": evidence,
-    })
-    if commit_payload:
-        task_state["commit"] = commit_payload["commit"]
-        for run_item in state.get("runs", []):
-            if run_item.get("receipt") == str(receipt_path.relative_to(root)):
-                run_item["commit"] = commit_payload["commit"]
-    save_state(root, state)
-    print(json.dumps({"done": asdict(task), "todoUpdated": str(todo_path), "receipt": str(receipt_path), "commit": commit_result}, indent=2))
+    try:
+        result = complete_task(
+            root, todo_path, task,
+            checks=args.check, skipped=args.skipped_check, browser_evidence=args.browser_evidence,
+            executed_results=executed_results, summary=args.summary, risk=args.risk,
+            commit=args.commit, all_=args.all, message=args.message, allow_no_commit=args.allow_no_commit,
+        )
+    except CompletionBlocked as exc:
+        raise SystemExit(str(exc))
+    print(json.dumps(result, indent=2))
     return 0
 
 
@@ -1523,10 +1597,11 @@ def read_package_json(root: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
     except Exception as exc:
         logger.debug("could not parse JSON file; using empty result: %s", exc)
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def package_dependencies(root: Path) -> dict[str, str]:

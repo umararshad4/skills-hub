@@ -65,8 +65,16 @@ class TestRequirementSatisfied(unittest.TestCase):
 
     def test_named_skip_with_reason_satisfies(self):
         self.assertTrue(
-            mct.requirement_satisfied("negative-path-check", [], [("negative-path-check", "tested")], [], False)
+            mct.requirement_satisfied("negative-path-check", [], [("negative-path-check", "tested manually on staging")], [], False)
         )
+
+    def test_single_char_attestation_is_rejected(self):
+        # The audit's `--check negative-path-check=x` bypass must now fail.
+        self.assertFalse(mct.requirement_satisfied("negative-path-check", [("negative-path-check", "x")], [], [], False))
+        self.assertFalse(mct.requirement_satisfied("negative-path-check", [("negative-path-check", "ok")], [], [], False))
+
+    def test_trivial_skip_reason_is_rejected(self):
+        self.assertFalse(mct.requirement_satisfied("negative-path-check", [], [("negative-path-check", "lazy")], [], False))
 
     def test_auto_executable_not_satisfied_by_self_report(self):
         # A bare claim of "typecheck" must NOT satisfy — it must be executed.
@@ -162,6 +170,36 @@ class TestBrowserArtifactOk(unittest.TestCase):
             ok, reason = mct.browser_artifact_ok(root, self._evidence(root, "shot.png"))
             self.assertFalse(ok)
             self.assertIn("not a valid image", reason)
+
+    def test_forged_png_without_pixel_data_is_rejected(self):
+        # 33-byte PNG: real signature + a fake 1920x1080 IHDR, but NO IDAT.
+        sig = b"\x89PNG\r\n\x1a\n"
+        ihdr = struct.pack(">I", 13) + b"IHDR" + struct.pack(">IIBBBBB", 1920, 1080, 8, 2, 0, 0, 0) + struct.pack(">I", 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "shot.png").write_bytes(sig + ihdr)
+            ok, reason = mct.browser_artifact_ok(root, self._evidence(root, "shot.png"))
+            self.assertFalse(ok)
+            self.assertIn("IDAT", reason)
+
+    def test_junk_jpeg_without_end_marker_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "shot.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 4000)  # SOI but no EOI
+            ev = mct.parse_browser_evidence(
+                [f"tool=playwright | url=http://x | viewport=1440x900 | screenshot=shot.jpg | result=pass"]
+            )
+            ok, reason = mct.browser_artifact_ok(root, ev)
+            self.assertFalse(ok)
+
+    def test_one_byte_proof_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "p.txt").write_text("x")
+            ev = mct.parse_browser_evidence(["tool=playwright | url=http://x | flow=login | proof=p.txt | result=pass"])
+            ok, reason = mct.browser_artifact_ok(root, ev)
+            self.assertFalse(ok)
+            self.assertIn("too small", reason)
 
     def test_string_only_evidence_has_no_artifact(self):
         evidence = mct.parse_browser_evidence(

@@ -9,7 +9,12 @@ mkdir -p "${TARGET_DIR}"
 copy_dir() {
   local name="$1"
   mkdir -p "${TARGET_DIR}/${name}"
-  rsync -a --delete "${ROOT_DIR}/${name}/" "${TARGET_DIR}/${name}/"
+  # --delete keeps the sync clean, but --backup-dir preserves any user-authored
+  # files it would otherwise remove/overwrite, so a reinstall never destroys a
+  # user's own skills/commands/agents without a recoverable copy.
+  rsync -a --delete \
+    --backup --backup-dir="${TARGET_DIR}/.mct-backups/${STAMP}/${name}" \
+    "${ROOT_DIR}/${name}/" "${TARGET_DIR}/${name}/"
 }
 
 STAMP="$(date +%Y%m%d%H%M%S)"

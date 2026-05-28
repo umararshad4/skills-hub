@@ -37,6 +37,17 @@ class TestState(unittest.TestCase):
             reloaded = mct.load_state(root)
         self.assertEqual(reloaded["tasks"]["abc"]["status"], "done")
 
+    def test_non_dict_state_falls_back_to_default(self):
+        # state.json = "null" / a list must not crash later commands.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".mct").mkdir()
+            for junk in ("null", "[1, 2, 3]", '"a string"'):
+                mct.state_path(root).write_text(junk)
+                state = mct.load_state(root)
+                self.assertIsInstance(state, dict)
+                self.assertIn("tasks", state)
+
     def test_load_state_backfills_missing_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -82,6 +93,15 @@ class TestConfig(unittest.TestCase):
             mct.config_path(root).write_text("not json")
             config = mct.load_config(root)
         self.assertIn("verification", config)
+
+    def test_non_dict_config_falls_back_to_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".mct").mkdir()
+            mct.config_path(root).write_text("[1, 2, 3]")
+            config = mct.load_config(root)
+            self.assertIsInstance(config, dict)
+            self.assertIn("verification", config)
 
     def test_load_config_merges_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:

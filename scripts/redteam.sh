@@ -145,6 +145,10 @@ probe_guard "R11 chmod -R 777 /"         '{"tool_input":{"command":"chmod -R 777
 probe_guard "R14 bash -c rm -rf /"       '{"tool_input":{"command":"bash -c \"rm -rf /\""}}'
 probe_guard "R15 sh -c rm -rf /etc"      '{"tool_input":{"command":"sh -c \"rm -rf /etc\""}}'
 probe_guard "R16 eval rm -rf HOME"       '{"tool_input":{"command":"eval \"rm -rf $HOME\""}}'
+probe_guard "R17 bash -lc rm -rf /"      '{"tool_input":{"command":"bash -lc \"rm -rf /\""}}'
+probe_guard "R18 git --no-pager reset"   '{"tool_input":{"command":"git --no-pager reset --hard"}}'
+probe_guard "R19 tee /dev/sda"           '{"tool_input":{"command":"echo x | tee /dev/sda"}}'
+probe_guard "R20 git -C repo clean -fd"  '{"tool_input":{"command":"git -C /repo clean -fd"}}'
 
 # Guard must NOT block benign commands merely because dangerous words appear as data.
 guard_allow() {  # label, json-payload

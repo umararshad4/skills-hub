@@ -2,6 +2,44 @@
 
 All notable changes to the MCT toolkit are documented here.
 
+## [2.1.0] - unreleased (second-order hardening from adversarial re-audit)
+
+An independent adversarial audit reproduced bypasses that the 2.0.0 hardening
+missed (first-order only). All are now closed with regression tests:
+
+### Security
+- **Dangerous-command guard** rewritten to handle attacks it previously allowed:
+  bundled interpreter flags (`bash -lc`/`-cx`/`-xc`, `sh -ec`, `zsh -lc "rm -rf /"`)
+  now recurse into the payload; `git` global options (`git --no-pager`/`-c`/`-C`
+  before the subcommand) are stripped before classifying `reset --hard`/`clean -fd`;
+  `tee`/`>|`/raw devices (`/dev/rdisk0`), `wipefs`/`shred`/`blkdiscard` on a device,
+  `chown -R` of a system root, `xargs rm -rf`, and writes to protected files
+  (`/etc/passwd`) are now blocked. A non-string command no longer crashes the guard.
+- **Browser proof realism**: a forged PNG header with no `IDAT` pixel data, a JPEG
+  without an end-of-image marker, a WEBP with a mismatched RIFF size, and a 1-byte
+  `proof=` file are all rejected (previously accepted as evidence).
+- **Attestation realism**: a single-character/keyword attestation or skip reason
+  (e.g. `--check negative-path-check=x`) no longer satisfies a required check; a
+  substantive multi-word reason is required. (Non-executable attestations remain
+  honor-based — this rejects degenerate detail, it does not verify truth.)
+
+### Reliability
+- `load_state`/`load_config`/`load_policy`/`read_package_json` no longer crash on
+  non-dict JSON (`state.json = "null"`, `package.json = "[1,2]"`) — they fall back
+  to defaults with a warning.
+- Pathologically deep `depends:` chains no longer crash dependency analysis
+  (RecursionError is caught and reported).
+
+### Install safety
+- `install.sh` now syncs with `--backup-dir`, so `--delete` can never destroy a
+  user's own `~/.claude/skills`/`commands`/`agents` content without a recoverable
+  copy (verified across GNU rsync and openrsync).
+
+### Internal
+- Extracted the verified completion gate into `complete_task` (+ `CompletionBlocked`);
+  `mct done` is now a thin caller (behavior preserved). Prepares the gate for reuse
+  by the forthcoming autonomous `mct run` loop.
+
 ## [2.0.0] - unreleased (production-hardening)
 
 Hardening pass that makes verification real instead of self-asserted, with a

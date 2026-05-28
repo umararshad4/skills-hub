@@ -44,6 +44,26 @@ class TestBlocks(unittest.TestCase):
         "sh -c 'rm -rf /etc'",
         'eval "rm -rf $HOME"',
         'bash -c "sudo rm -rf /usr"',
+        # Audit-reproduced bypasses (bundled interpreter flags):
+        'bash -lc "rm -rf /"',
+        'bash -cx "rm -rf /"',
+        'bash -xc "rm -rf /"',
+        "sh -ec 'rm -rf /'",
+        'zsh -lc "rm -rf /"',
+        # git global options before the subcommand:
+        "git --no-pager reset --hard",
+        "git -c core.pager=cat clean -fd",
+        "git -C /repo reset --hard",
+        # device / protected writes the operator/regex set missed:
+        "echo x | tee /dev/sda",
+        "echo x > /dev/rdisk0",
+        "echo x >| /dev/sda",
+        "wipefs /dev/sda",
+        "shred /dev/sda",
+        # broad destructive forms:
+        "chown -R root:root /",
+        "find /Users | xargs rm -rf",
+        "echo '' > /etc/passwd",
     ]
 
     def test_destructive_commands_are_blocked(self):
@@ -70,6 +90,12 @@ class TestAllows(unittest.TestCase):
         'bash -c "ls -la"',                      # benign interpreter payload
         "sh -c 'npm run build'",
         'eval "echo hello"',
+        'bash -lc "ls -la"',                     # bundled flags, benign payload
+        "git -C /repo status",                   # git global opt, benign subcommand
+        "git --no-pager log",
+        "chown -R me:me ./dist",                 # recursive chown of a relative path
+        "tee out.log",                           # tee to a normal file
+        "shred ./secret.txt",                    # shred a file (not a device)
     ]
 
     def test_benign_commands_are_allowed(self):
@@ -88,6 +114,12 @@ class TestEdgeCases(unittest.TestCase):
 
     def test_chained_destructive_command_is_blocked(self):
         self.assertIsNotNone(guard.dangerous_reason("cd /tmp && rm -rf /etc"))
+
+    def test_non_string_command_does_not_crash(self):
+        # A list payload must be analyzed, not raise.
+        self.assertIsNotNone(guard.dangerous_reason(["rm", "-rf", "/"]))
+        self.assertIsNone(guard.dangerous_reason(["ls", "-la"]))
+        self.assertIsNone(guard.dangerous_reason(None))
 
 
 if __name__ == "__main__":
