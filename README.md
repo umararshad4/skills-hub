@@ -26,10 +26,20 @@ guidance an agent chooses to follow. Be clear-eyed about which is which:
   `git`, …) by parsing the actual command, not substring-matching text.
 - State writes are atomic; `mct next --claim` records and respects task claims.
 
+- `mct run` is a real, in-code autonomous control loop: it drains the TODO queue, dispatches a
+  pluggable work command, verifies through the same gate as `mct done`, commits, rolls back failed
+  attempts (non-destructively), retries, and stops on hard guards (`--max-iterations`,
+  `--max-failures`, `--max-seconds`, `.mct/STOP`). It is opt-in (`--yes` + a configured agent
+  command, clean tree required) and **cannot mark a task done without satisfying its required
+  checks** — a UI task with no real browser proof is blocked, not faked.
+
 **Advisory (prose an agent may or may not follow):** the `CLAUDE.md`/`MCT.md` engineering loop,
 skill selection and routing, the activation contract injected by the prompt hook, and the
-subagent role prompts. These shape behavior but are not enforced by code. There is no autonomous
-control loop, scheduler, or multi-agent dispatcher — a human or agent drives each step.
+subagent role prompts. These shape behavior but are not enforced by code.
+
+**Honest bounds of the autonomy:** `mct run` orchestrates an *external* work command (it cannot
+itself reason or write code), runs tasks strictly sequentially (no parallel dispatch), and is
+bounded by the verified gate. It is a real bounded executor, not a self-authoring agent.
 
 ## What Is Included
 

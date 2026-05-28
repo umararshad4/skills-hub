@@ -2,6 +2,33 @@
 
 All notable changes to the MCT toolkit are documented here.
 
+## [3.0.0] - unreleased (autonomy: the `mct run` control loop)
+
+Adds a genuine in-code control loop. Previously `mct` was a one-shot dispatcher
+and the "loop" lived only in advisory markdown; now it lives in code.
+
+### Added
+- **`mct run`** — an autonomous loop that drains the runnable TODO queue: for each
+  task it claims the task, dispatches a pluggable work-step command, runs the
+  required deterministic checks, and on success completes the task through the
+  **same verified `complete_task` gate as `mct done`** (commit, then flip the
+  checkbox). On failure it rolls back the attempt non-destructively (`git stash`,
+  never `reset --hard`), retries, then marks the task `#blocked` and moves on.
+  - Work step is pluggable: `--agent-cmd`, `MCT_AGENT_CMD`, or
+    `autonomy.agentCommand` (mct owns the loop; the agent only edits the repo).
+  - Safety: requires `--yes` to mutate the repo, requires a clean tree at start
+    (unless `autonomy.allowDirtyStart`), and refuses with no work command.
+  - Hard stop guards: `--max-iterations`, `--max-failures`, `--max-seconds`, a
+    per-task timeout, and a `.mct/STOP` kill-switch (`mct run --stop`).
+  - Resumable run-state under `.mct/runs/<runId>.json`; `--dry-run` previews.
+- **Crucially, the loop cannot fake completion**: a UI task with no real browser
+  proof is blocked, not marked done (regression-tested as AC-RUN).
+
+### Notes
+- `VERSION` → `3.0.0` (the marketed "no autonomous control loop" invariant is
+  reversed). The self-improvement / auto-PR feedback pipeline is designed but not
+  yet shipped (tracked separately; will land off-by-default and consent-gated).
+
 ## [2.1.0] - unreleased (second-order hardening from adversarial re-audit)
 
 An independent adversarial audit reproduced bypasses that the 2.0.0 hardening

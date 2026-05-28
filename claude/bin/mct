@@ -6,15 +6,17 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "2.1.0"
+VERSION = "3.0.0"
 
 # Observability: warnings are surfaced on stderr (never stdout, which carries the
 # machine-readable JSON). Set MCT_DEBUG=1 for verbose/debug output.
@@ -141,6 +143,16 @@ def default_config(root: Path) -> dict:
             "askBefore": ["destructive changes", "product-defining UX choices", "credentials", "paid/external account changes"],
             "commitPerVerifiedTodo": True,
             "pushAutomatically": False,
+            # `mct run` control loop. agentCommand is the pluggable work step;
+            # the loop owns claim/verify/commit/retry/rollback/stop around it.
+            "agentCommand": None,
+            "autoConfirm": False,
+            "allowDirtyStart": False,
+            "maxIterations": 20,
+            "maxFailures": 10,
+            "maxSeconds": 3600,
+            "retries": 1,
+            "perTaskTimeoutSeconds": 1800,
         },
         "verification": {
             "requireBrowserProofForUiTodos": True,
@@ -1553,6 +1565,201 @@ def command_done(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Autonomous control loop: `mct run`
+# ---------------------------------------------------------------------------
+
+def runs_dir(root: Path) -> Path:
+    return root / ".mct" / "runs"
+
+
+def stop_file(root: Path) -> Path:
+    return root / ".mct" / "STOP"
+
+
+def head_sha(root: Path) -> str:
+    proc = run(["git", "rev-parse", "HEAD"], root)
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def working_tree_changes(root: Path) -> list[str]:
+    proc = run(["git", "status", "--porcelain"], root)
+    if proc.returncode != 0:
+        return []
+    return [line for line in proc.stdout.splitlines() if line.strip() and ".mct/" not in line]
+
+
+def dispatch_agent(root: Path, agent_cmd: str, task: TodoTask, run_id: str, attempt: int, timeout: int) -> dict:
+    """Run the pluggable work-step command for one task. The loop owns everything
+    around it (verify/commit/retry/rollback); the agent only edits the repo."""
+    try:
+        argv = shlex.split(agent_cmd) + ["--task-id", task.id, "--task-text", task.clean_text]
+    except ValueError:
+        return {"ok": False, "reason": "bad-agent-command"}
+    env = {
+        **os.environ,
+        "MCT_TASK_ID": task.id,
+        "MCT_TASK_TEXT": task.clean_text,
+        "MCT_TASK_FILES": ",".join(task.files),
+        "MCT_TASK_RISK": task.risk,
+        "MCT_RUN_ID": run_id,
+        "MCT_ATTEMPT": str(attempt),
+        "MCT_ROOT": str(root),
+    }
+    try:
+        proc = subprocess.run(
+            argv, cwd=str(root), env=env, timeout=timeout,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "reason": "agent-timeout"}
+    except FileNotFoundError:
+        return {"ok": False, "reason": "agent-command-not-found"}
+    return {"ok": proc.returncode == 0, "exitCode": proc.returncode}
+
+
+def rollback_attempt(root: Path) -> bool:
+    """Non-destructively return the tree to the last commit by stashing the failed
+    attempt's changes (recoverable via `git stash list`). Never uses reset --hard."""
+    if not working_tree_changes(root):
+        return True
+    proc = run(["git", "stash", "push", "--include-untracked", "-m", "mct-run: rolled-back failed attempt"], root)
+    return proc.returncode == 0
+
+
+def run_required_checks(root: Path, task: TodoTask) -> list[dict]:
+    """Execute the deterministically-runnable required checks for a task."""
+    return [run_named_check(root, name) for name in task_required_checks(task, root) if name in AUTO_EXECUTABLE_CHECKS]
+
+
+def mark_blocked(root: Path, todo_path: Path, task: TodoTask, reason: str) -> None:
+    state = load_state(root)
+    entry = state.setdefault("tasks", {}).setdefault(task.id, {})
+    entry.update({"status": "blocked", "blockedAt": now(), "reason": reason, "text": task.clean_text})
+    save_state(root, state)
+    try:
+        lines = todo_path.read_text(errors="ignore").splitlines()
+        i = task.line - 1
+        if 0 <= i < len(lines) and "#blocked" not in lines[i]:
+            lines[i] = lines[i].rstrip() + " #blocked"
+            todo_path.write_text("\n".join(lines) + "\n")
+    except OSError:
+        pass
+
+
+def command_run(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+
+    if args.stop:
+        stop_file(root).parent.mkdir(parents=True, exist_ok=True)
+        stop_file(root).write_text(now() + "\n")
+        print(json.dumps({"stopped": True, "stopFile": str(stop_file(root))}, indent=2))
+        return 0
+
+    config = load_config(root)
+    autonomy = config.get("autonomy", {})
+    policy = load_policy()
+    todo_path, tasks = parse_todo(root, policy)
+    if not todo_path:
+        raise SystemExit("TODO.md not found; mct run drains the TODO queue")
+
+    agent_cmd = args.agent_cmd or os.environ.get("MCT_AGENT_CMD") or autonomy.get("agentCommand")
+    plan = task_plan(tasks)
+
+    if args.dry_run:
+        print(json.dumps({"dryRun": True, "agentCommand": agent_cmd, "mode": plan["mode"], "next": plan["next"]}, indent=2))
+        return 0
+    if not agent_cmd:
+        raise SystemExit(
+            "mct run needs a work-step command: pass --agent-cmd, set MCT_AGENT_CMD, or config "
+            "autonomy.agentCommand. Use --dry-run to preview without one."
+        )
+    confirmed = args.yes or autonomy.get("autoConfirm") or os.environ.get("MCT_RUN_YES") == "1"
+    if not confirmed:
+        print(json.dumps({"refused": "mct run mutates the repo unattended; re-run with --yes (or set autonomy.autoConfirm)", "next": plan["next"]}, indent=2))
+        return 2
+    if working_tree_changes(root) and not (args.yes and autonomy.get("allowDirtyStart")):
+        raise SystemExit("working tree is dirty; commit/stash first, or set autonomy.allowDirtyStart and pass --yes")
+
+    def limit(flag, key, default):
+        return flag if flag is not None else autonomy.get(key, default)
+
+    limits = {
+        "maxIterations": limit(args.max_iterations, "maxIterations", 20),
+        "maxFailures": limit(args.max_failures, "maxFailures", 10),
+        "maxSeconds": limit(args.max_seconds, "maxSeconds", 3600),
+        "retries": limit(args.retries, "retries", 1),
+        "perTaskTimeout": autonomy.get("perTaskTimeoutSeconds", 1800),
+    }
+    run_id = task_id(now() + str(os.getpid()))
+    deadline = time.monotonic() + float(limits["maxSeconds"])
+    record = {"runId": run_id, "startedAt": now(), "agentCommand": agent_cmd, "limits": limits, "tasks": [], "stopReason": None}
+    iterations = failures = 0
+    terminal: set[str] = set()
+
+    def persist():
+        save_json_atomic(runs_dir(root) / f"{run_id}.json", record)
+
+    while True:
+        if stop_file(root).exists():
+            record["stopReason"] = "stop-file"; stop_file(root).unlink(missing_ok=True); break
+        if iterations >= limits["maxIterations"]:
+            record["stopReason"] = "max-iterations"; break
+        if failures >= limits["maxFailures"]:
+            record["stopReason"] = "max-failures"; break
+        if time.monotonic() >= deadline:
+            record["stopReason"] = "max-seconds"; break
+
+        _, tasks = parse_todo(root, policy)
+        plan = task_plan(tasks)
+        nxt = next((t for t in plan["next"] if t["id"] not in terminal), None)
+        if not nxt:
+            record["stopReason"] = "queue-drained"; break
+        task = next(t for t in tasks if t.id == nxt["id"])
+        iterations += 1
+        entry = {"taskId": task.id, "text": task.clean_text, "attempts": [], "outcome": None}
+
+        for attempt in range(1, int(limits["retries"]) + 2):
+            dispatch = dispatch_agent(root, agent_cmd, task, run_id, attempt, int(limits["perTaskTimeout"]))
+            att = {"attempt": attempt, "dispatch": dispatch}
+            if not dispatch.get("ok"):
+                att["result"] = "agent-failed"; entry["attempts"].append(att); rollback_attempt(root); failures += 1; continue
+            if not working_tree_changes(root):
+                att["result"] = "agent-noop"; entry["attempts"].append(att); failures += 1; continue
+            executed = run_required_checks(root, task)
+            if any(r.get("executed") and r.get("result") != "pass" for r in executed):
+                att["result"] = "checks-failed"; entry["attempts"].append(att); rollback_attempt(root); failures += 1; continue
+            try:
+                complete_task(
+                    root, todo_path, task, checks=None, skipped=None, browser_evidence=None,
+                    executed_results=executed, summary=f"mct run: {task.clean_text}", commit=True, all_=True,
+                )
+                att["result"] = "verified-done"; entry["attempts"].append(att); entry["outcome"] = "done"
+                terminal.add(task.id); break
+            except CompletionBlocked as exc:
+                att["result"] = "gate-blocked"; att["reason"] = str(exc)
+                entry["attempts"].append(att); rollback_attempt(root); failures += 1; continue
+
+        if entry["outcome"] != "done":
+            entry["outcome"] = "blocked"
+            last = entry["attempts"][-1] if entry["attempts"] else {}
+            mark_blocked(root, todo_path, task, reason=last.get("reason") or last.get("result", "exhausted retries"))
+            terminal.add(task.id)
+        record["tasks"].append(entry)
+        persist()
+
+    record["finishedAt"] = now()
+    persist()
+    done = [t for t in record["tasks"] if t["outcome"] == "done"]
+    blocked = [t for t in record["tasks"] if t["outcome"] == "blocked"]
+    print(json.dumps({
+        "runId": run_id, "stopReason": record["stopReason"],
+        "done": len(done), "blocked": len(blocked),
+        "runState": str(runs_dir(root) / f"{run_id}.json"),
+    }, indent=2))
+    return 0 if not blocked else 1
+
+
 def command_commit(args: argparse.Namespace) -> int:
     root = find_root(Path.cwd())
     task = None
@@ -2246,6 +2453,17 @@ def main() -> int:
     self_update.set_defaults(func=command_self_update)
 
     sub.add_parser("doctor").set_defaults(func=command_doctor)
+
+    run_cmd = sub.add_parser("run", help="Autonomous loop: drain the TODO queue via a pluggable work command")
+    run_cmd.add_argument("--agent-cmd", help="Work-step command (overrides MCT_AGENT_CMD / autonomy.agentCommand)")
+    run_cmd.add_argument("--max-iterations", type=int)
+    run_cmd.add_argument("--max-failures", type=int)
+    run_cmd.add_argument("--max-seconds", type=int)
+    run_cmd.add_argument("--retries", type=int)
+    run_cmd.add_argument("--yes", action="store_true", help="Confirm unattended repo mutation")
+    run_cmd.add_argument("--dry-run", action="store_true", help="Print the plan without dispatching")
+    run_cmd.add_argument("--stop", action="store_true", help="Write the kill-switch .mct/STOP")
+    run_cmd.set_defaults(func=command_run)
 
     args = parser.parse_args()
     return args.func(args)
