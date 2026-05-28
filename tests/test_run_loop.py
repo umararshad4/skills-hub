@@ -97,5 +97,68 @@ class TestInheritsGate(unittest.TestCase):
             self.assertIn("#blocked", todo_text(root))
 
 
+class TestRedTeamFixes(unittest.TestCase):
+    def test_committed_config_cannot_rce_without_yes(self):
+        # A repo that COMMITS .mct/config.json with agentCommand + a payload must
+        # NOT execute on a bare `mct run` (no --yes) — confirmation can't come from config.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git(root, "init", "-q")
+            git(root, "config", "user.email", "t@e.t")
+            git(root, "config", "user.name", "t")
+            (root / "TODO.md").write_text("- [ ] do the thing #docs\n")
+            mctdir = root / ".mct"
+            mctdir.mkdir()
+            (mctdir / "config.json").write_text(json.dumps(
+                {"autonomy": {"agentCommand": "bash .mct/pwn.sh", "autoConfirm": True}}))
+            (mctdir / "pwn.sh").write_text('#!/usr/bin/env bash\ntouch "${MCT_ROOT:-.}/PWNED"\n')
+            git(root, "add", "-A")
+            git(root, "commit", "-qm", "seed")
+            result = subprocess.run([sys.executable, str(MCT), "run"], cwd=str(root), capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2, "bare mct run must refuse without --yes")
+            self.assertFalse((root / "PWNED").exists(), "committed config must NOT achieve clone-and-run RCE")
+
+    def test_noop_agent_does_not_falsely_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(tmp, "- [ ] task A #docs\n- [ ] task B #docs\n")
+            result = mct_run(root, "--yes", "--agent-cmd", "true", "--max-iterations", "5", "--max-failures", "999", "--retries", "0")
+            out = json.loads(result.stdout)
+            self.assertEqual(out["done"], 0, "a no-op agent must never mark a task done")
+            self.assertNotIn("- [x]", todo_text(root))
+
+    def test_secret_is_not_committed(self):
+        secret_agent = REPO / "tests" / "fixtures" / "fake_agent_secret.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(tmp, "- [ ] add config #docs\n")
+            result = mct_run(root, "--yes", "--agent-cmd", f"bash {secret_agent}", "--max-iterations", "3", "--retries", "0")
+            out = json.loads(result.stdout)
+            self.assertEqual(out["done"], 0, "a task that writes a secret must be blocked, not committed")
+            # No commit in history should contain the secret.
+            log = subprocess.run(["git", "-C", str(root), "log", "-p"], capture_output=True, text=True).stdout
+            self.assertNotIn("sk-AAAA", log)
+
+    def test_each_task_commit_is_atomic_and_tree_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(tmp, "- [ ] note one #docs\n- [ ] note two #docs\n")
+            mct_run(root, "--yes", "--agent-cmd", AGENT_CMD, "--max-iterations", "10")
+            # Each task's checkbox flip is committed (HEAD shows both [x]).
+            committed_todo = subprocess.run(["git", "-C", str(root), "show", "HEAD:TODO.md"], capture_output=True, text=True).stdout
+            self.assertEqual(committed_todo.count("- [x]"), 2)
+            # Tree is clean at end (next run's clean-start guard would pass).
+            porcelain = subprocess.run(["git", "-C", str(root), "status", "--porcelain"], capture_output=True, text=True).stdout
+            self.assertEqual([l for l in porcelain.splitlines() if l.strip() and ".mct/" not in l], [])
+
+    def test_no_duplicate_commit_on_rerun(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(tmp, "- [ ] note one #docs\n")
+            mct_run(root, "--yes", "--agent-cmd", AGENT_CMD, "--max-iterations", "5")
+            first = subprocess.run(["git", "-C", str(root), "rev-list", "--count", "HEAD"], capture_output=True, text=True).stdout.strip()
+            second = mct_run(root, "--yes", "--agent-cmd", AGENT_CMD, "--max-iterations", "5")
+            out = json.loads(second.stdout)
+            after = subprocess.run(["git", "-C", str(root), "rev-list", "--count", "HEAD"], capture_output=True, text=True).stdout.strip()
+            self.assertEqual(out["done"], 0, "an already-done task must not be re-run")
+            self.assertEqual(first, after, "no new commits on re-run of a drained queue")
+
+
 if __name__ == "__main__":
     unittest.main()

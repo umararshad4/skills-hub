@@ -9,6 +9,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -148,7 +149,6 @@ def default_config(root: Path) -> dict:
             # `mct run` control loop. agentCommand is the pluggable work step;
             # the loop owns claim/verify/commit/retry/rollback/stop around it.
             "agentCommand": None,
-            "autoConfirm": False,
             "allowDirtyStart": False,
             "maxIterations": 20,
             "maxFailures": 10,
@@ -1420,13 +1420,24 @@ def command_browser_proof(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 1
 
 
-def update_todo_checkbox(todo_path: Path, line_no: int) -> None:
+def update_todo_checkbox(todo_path: Path, line_no: int, checked: bool = True) -> None:
     lines = todo_path.read_text(errors="ignore").splitlines()
     index = line_no - 1
     if index < 0 or index >= len(lines):
         raise SystemExit(f"line {line_no} not found in {todo_path}")
-    lines[index] = re.sub(r"^(\s*[-*]\s+\[)[ xX](\]\s+)", r"\1x\2", lines[index])
+    mark = "x" if checked else " "
+    lines[index] = re.sub(r"^(\s*[-*]\s+\[)[ xX](\]\s+)", rf"\1{mark}\2", lines[index])
     todo_path.write_text("\n".join(lines) + "\n")
+
+
+def stage_for_commit(root: Path, paths: list[str] | None) -> None:
+    """Stage paths (scoped to the task's files when known, else everything), then
+    un-stage .mct/ bookkeeping so it never lands in a task commit."""
+    if paths:
+        run(["git", "add", "--", *paths], root)
+    else:
+        run(["git", "add", "-A"], root)
+    run(["git", "reset", "-q", "--", ".mct"], root)
 
 
 def command_run_check(args: argparse.Namespace) -> int:
@@ -1498,19 +1509,37 @@ def complete_task(
     commit_result = None
     commit_payload = None
     if commit:
+        # Flip the checkbox FIRST and stage it, so the [x] is committed atomically
+        # with the task (no off-by-one, no done-but-uncommitted final task). Revert
+        # the flip if the commit cannot be made.
+        if not task.done:
+            update_todo_checkbox(todo_path, task.line, checked=True)
+        rel_todo = str(todo_path.relative_to(root)) if todo_path.is_relative_to(root) else todo_path.name
+        if all_:
+            stage_for_commit(root, ([*task.files, rel_todo] if task.files else None))
+        else:
+            stage_for_commit(root, [rel_todo])  # add the flip to any pre-staged work
+        # Never autonomously commit a secret.
+        found, secret_reason = has_secret_in_staged(root)
+        if found:
+            if not task.done:
+                update_todo_checkbox(todo_path, task.line, checked=False)
+            raise CompletionBlocked(f"refusing to commit a likely secret: {secret_reason}")
         subject = message or commit_subject(task, summary)
         body = commit_body(task, checks or [], skipped or [], None)
-        commit_result = git_commit(root, subject, body, all_)
+        commit_result = git_commit(root, subject, body, include_all=False)
         if commit_result.get("ok"):
             commit_payload = {"commit": {"sha": commit_result.get("sha"), "subject": commit_result.get("subject")}}
         elif not allow_no_commit:
+            if not task.done:
+                update_todo_checkbox(todo_path, task.line, checked=False)
             raise CompletionBlocked(
                 "commit failed; TODO left unchanged: "
                 + (commit_result.get("reason") or commit_result.get("stderr") or "unknown error")
             )
+    elif not task.done:
+        update_todo_checkbox(todo_path, task.line, checked=True)
 
-    if not task.done:
-        update_todo_checkbox(todo_path, task.line)
     if commit_payload:
         receipt.update(commit_payload)
     receipt_path = append_receipt(root, receipt)
@@ -1615,15 +1644,25 @@ def dispatch_agent(root: Path, agent_cmd: str, task: TodoTask, run_id: str, atte
         "MCT_ATTEMPT": str(attempt),
         "MCT_ROOT": str(root),
     }
+    # Run in its own process group so a timeout kills backgrounded grandchildren too.
     try:
-        proc = subprocess.run(
-            argv, cwd=str(root), env=env, timeout=timeout,
+        proc = subprocess.Popen(
+            argv, cwd=str(root), env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "reason": "agent-timeout"}
     except FileNotFoundError:
         return {"ok": False, "reason": "agent-command-not-found"}
+    try:
+        proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError) as exc:
+            logger.debug("could not kill agent process group: %s", exc)
+            proc.kill()
+        proc.communicate()
+        return {"ok": False, "reason": "agent-timeout"}
     return {"ok": proc.returncode == 0, "exitCode": proc.returncode}
 
 
@@ -1652,6 +1691,11 @@ def mark_blocked(root: Path, todo_path: Path, task: TodoTask, reason: str) -> No
         if 0 <= i < len(lines) and "#blocked" not in lines[i]:
             lines[i] = lines[i].rstrip() + " #blocked"
             todo_path.write_text("\n".join(lines) + "\n")
+            # Commit the marker so it is durable (survives a later rollback) AND the
+            # working tree stays clean for the next task's agent-delta baseline.
+            rel_todo = str(todo_path.relative_to(root)) if todo_path.is_relative_to(root) else todo_path.name
+            stage_for_commit(root, [rel_todo])
+            git_commit(root, f"chore: mark blocked: {task.clean_text[:50]}", f"Task-ID: {task.id}\nReason: {reason}", include_all=False)
     except OSError:
         pass
 
@@ -1672,21 +1716,40 @@ def command_run(args: argparse.Namespace) -> int:
     if not todo_path:
         raise SystemExit("TODO.md not found; mct run drains the TODO queue")
 
-    agent_cmd = args.agent_cmd or os.environ.get("MCT_AGENT_CMD") or autonomy.get("agentCommand")
+    agent_cmd = args.agent_cmd or os.environ.get("MCT_AGENT_CMD")
+    cmd_from_config = False
+    if not agent_cmd and autonomy.get("agentCommand"):
+        agent_cmd, cmd_from_config = autonomy.get("agentCommand"), True
     plan = task_plan(tasks)
 
     if args.dry_run:
-        print(json.dumps({"dryRun": True, "agentCommand": agent_cmd, "mode": plan["mode"], "next": plan["next"]}, indent=2))
+        print(json.dumps({"dryRun": True, "agentCommand": agent_cmd, "agentCommandFromRepoConfig": cmd_from_config,
+                          "mode": plan["mode"], "next": plan["next"]}, indent=2))
         return 0
     if not agent_cmd:
         raise SystemExit(
             "mct run needs a work-step command: pass --agent-cmd, set MCT_AGENT_CMD, or config "
             "autonomy.agentCommand. Use --dry-run to preview without one."
         )
-    confirmed = args.yes or autonomy.get("autoConfirm") or os.environ.get("MCT_RUN_YES") == "1"
+    # Confirmation may ONLY come from the caller (flag/env), never from in-repo
+    # config — a committed .mct/config.json must not be able to both name the
+    # command AND waive consent (that would be clone-and-run RCE).
+    confirmed = args.yes or os.environ.get("MCT_RUN_YES") == "1"
     if not confirmed:
-        print(json.dumps({"refused": "mct run mutates the repo unattended; re-run with --yes (or set autonomy.autoConfirm)", "next": plan["next"]}, indent=2))
+        print(json.dumps({"refused": "mct run mutates the repo unattended; re-run with --yes", "next": plan["next"]}, indent=2))
         return 2
+    if cmd_from_config:
+        logger.warning(
+            "agent command came from the repo's committed .mct/config.json (%r); proceeding only "
+            "because --yes was given explicitly. Review it before trusting an untrusted repo.", agent_cmd,
+        )
+    # Keep .mct/ untracked so the rollback stash (--include-untracked) never swallows
+    # MCT's own bookkeeping. Commit the .gitignore if that is the only resulting change.
+    ensure_gitignore(root)
+    pending = working_tree_changes(root)
+    if pending and all(line.endswith(".gitignore") for line in pending):
+        stage_for_commit(root, [".gitignore"])
+        git_commit(root, "chore: ignore .mct toolkit state", "", include_all=False)
     if working_tree_changes(root) and not (args.yes and autonomy.get("allowDirtyStart")):
         raise SystemExit("working tree is dirty; commit/stash first, or set autonomy.allowDirtyStart and pass --yes")
 
@@ -1711,7 +1774,12 @@ def command_run(args: argparse.Namespace) -> int:
 
     while True:
         if stop_file(root).exists():
-            record["stopReason"] = "stop-file"; stop_file(root).unlink(missing_ok=True); break
+            record["stopReason"] = "stop-file"
+            try:
+                stop_file(root).unlink(missing_ok=True)
+            except (IsADirectoryError, PermissionError, OSError) as exc:
+                logger.debug("could not remove STOP file: %s", exc)
+            break
         if iterations >= limits["maxIterations"]:
             record["stopReason"] = "max-iterations"; break
         if failures >= limits["maxFailures"]:
@@ -1729,11 +1797,14 @@ def command_run(args: argparse.Namespace) -> int:
         entry = {"taskId": task.id, "text": task.clean_text, "attempts": [], "outcome": None}
 
         for attempt in range(1, int(limits["retries"]) + 2):
+            before = set(working_tree_changes(root))  # baseline so we measure the AGENT'S delta
             dispatch = dispatch_agent(root, agent_cmd, task, run_id, attempt, int(limits["perTaskTimeout"]))
             att = {"attempt": attempt, "dispatch": dispatch}
             if not dispatch.get("ok"):
                 att["result"] = "agent-failed"; entry["attempts"].append(att); rollback_attempt(root); failures += 1; continue
-            if not working_tree_changes(root):
+            if not (set(working_tree_changes(root)) - before):
+                # No change attributable to THIS agent run — never count leftover
+                # state as work, so an unedited task cannot be falsely completed.
                 att["result"] = "agent-noop"; entry["attempts"].append(att); failures += 1; continue
             executed = run_required_checks(root, task)
             if any(r.get("executed") and r.get("result") != "pass" for r in executed):

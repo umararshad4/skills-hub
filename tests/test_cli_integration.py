@@ -61,18 +61,18 @@ class TestClaimConsumption(unittest.TestCase):
 
 
 class TestDoneCommitOrdering(unittest.TestCase):
-    def test_failed_commit_leaves_checkbox_unflipped(self):
+    def test_done_commit_is_atomic_never_done_but_uncommitted(self):
+        # AC8 invariant: after `mct done --commit`, the task is either [x] AND
+        # committed, or untouched — never [x]-but-uncommitted. The checkbox flip
+        # now commits atomically (committing the flip itself when nothing else is staged).
         with tempfile.TemporaryDirectory() as tmp:
-            # A plain docs task (no required checks) and NOTHING staged to commit.
             root = make_repo(tmp, "- [ ] update the changelog notes #docs\n")
-            result = mct_run(
-                root, "done", "changelog",
-                "--check", "diff-review=read the diff",
-                "--commit",
-            )
-            self.assertNotEqual(result.returncode, 0, "commit with no changes should fail")
-            self.assertIn("- [ ]", (root / "TODO.md").read_text())
-            self.assertNotIn("- [x]", (root / "TODO.md").read_text())
+            result = mct_run(root, "done", "changelog", "--check", "diff-review=read the diff", "--commit")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("- [x]", (root / "TODO.md").read_text())
+            # The flip is committed — HEAD:TODO.md shows [x], so no done-but-uncommitted state.
+            committed = subprocess.run(["git", "-C", str(root), "show", "HEAD:TODO.md"], capture_output=True, text=True).stdout
+            self.assertIn("- [x]", committed)
 
     def test_successful_done_flips_checkbox(self):
         with tempfile.TemporaryDirectory() as tmp:

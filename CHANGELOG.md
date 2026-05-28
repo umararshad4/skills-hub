@@ -24,6 +24,25 @@ and the "loop" lived only in advisory markdown; now it lives in code.
 - **Crucially, the loop cannot fake completion**: a UI task with no real browser
   proof is blocked, not marked done (regression-tested as AC-RUN).
 
+### Fixed — loop bugs found by an adversarial red-team (before shipping)
+- **Clone-and-run RCE closed**: a committed `.mct/config.json` can no longer waive
+  confirmation — `--yes`/`MCT_RUN_YES` is required from the caller regardless of
+  config, and a config-sourced agent command warns loudly. A bare `mct run` in a
+  hostile repo no longer executes committed code.
+- **No false completion**: the no-op guard now measures the *agent's own delta*
+  (not absolute tree dirtiness), so a leftover `#blocked` edit can't make an
+  unedited task get marked done.
+- **No swallowed bookkeeping / duplicate commits**: the checkbox flip is committed
+  atomically with its task (flip-before-commit, revert-on-failure), `.mct/` is
+  gitignored so the rollback stash can't capture MCT state, and `#blocked` markers
+  are committed (durable across rollbacks). The run ends with a clean tree.
+- **No secret commits**: the autonomous commit path runs the secret scanner and
+  blocks the task instead of committing a detected secret.
+- **Scoped commits**: when a task declares `files:`, only those (plus `TODO.md`)
+  are staged, instead of `git add -A` sweeping unrelated/stray files.
+- **No orphaned processes**: the agent runs in its own process group and the whole
+  group is killed on timeout. The `.mct/STOP` kill-switch can't crash the loop.
+
 ### Added — self-improvement (local crash capture + opt-in upstream issue)
 - **Local crash capture**: an unexpected `mct` error writes a REDACTED, LOCAL-ONLY
   report to `.mct/crashes/<sig>.json` and re-raises (the error still surfaces).
