@@ -61,12 +61,12 @@ checked AND `bash scripts/check.sh` exits 0, with the full output pasted as proo
   in `scripts/redteam.sh`; plus unit tests for each.
 
 ### AC3 — Danger guard hardened (no more security theater)
-- [ ] Rewrite `claude/hooks/scripts/guard-dangerous-command.py` to detect destructive commands
+- [x] Rewrite `claude/hooks/scripts/guard-dangerous-command.py` to detect destructive commands
       structurally (tokenize; don't just substring-match the raw text). Must BLOCK: `rm -rf /`,
       `rm -rf /*`, `rm -rf ~`, `rm -rf $HOME`, `rm -fr /<path>`, `rm --recursive --force ...`,
       `mkfs.*`, `dd ... of=/dev/...`, `find / -delete`, `git reset --hard`, `git clean -fdx`,
       `git push -f` / `--force`, `chmod -R 777`, fork bomb `:(){ :|:& };:`, `> /dev/sda`.
-- [ ] Reduce false positives: do not block solely because a dangerous word appears as data/text;
+- [x] Reduce false positives: do not block solely because a dangerous word appears as data/text;
       match the actual command being run.
 - Verify: red-team R4..Rn — each previously-bypassing command now yields `{"decision":"block"}`;
   unit tests for both block and allow cases.
@@ -132,3 +132,4 @@ checked AND `bash scripts/check.sh` exits 0, with the full output pasted as proo
 _The loop appends a one-line note per iteration: which AC advanced and the verify result._
 - AC1: 70-test stdlib unittest suite added; `python3 -m unittest discover -s tests` green.
 - AC2: verification hardened (named-equality checks, real image artifacts, run-check); red-team R1/R2/R3 now BLOCKED, allow-cases A1/A2/A3 accepted.
+- AC3: danger guard rewritten with shlex tokenization + command-name scan; R4-R11 BLOCKED, R12/R13 allowed, 75 unit tests green.

@@ -34,6 +34,14 @@ test suite and red-team regression probes proving the gates cannot be faked.
 - `mct done` now commits **before** flipping the TODO checkbox, so a failed
   commit never leaves a task marked done-but-uncommitted.
 - `mct browser-proof` rejects empty or non-image screenshot files.
+- The dangerous-command guard (`guard-dangerous-command.py`) now tokenizes the
+  command with `shlex` and inspects the real command name + args instead of
+  substring-matching raw text. It blocks recursive-force deletes of absolute /
+  home / root paths (any flag order, incl. behind `sudo`/`xargs`), `mkfs`, `dd`
+  to a device, `find / -delete`, `chmod -R 777`, destructive `git`
+  (`reset --hard`, `clean -fd`, `push --force`/`-f`), fork bombs, and redirects
+  to raw block devices — while no longer false-positiving on dangerous words
+  used as data (e.g. `echo "rm -rf /"`) or relative deletes (`rm -rf dist`).
 
 ### Notes
 - `VERSION` bumped to `2.0.0`.
