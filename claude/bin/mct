@@ -777,6 +777,42 @@ def is_valid_image(path: Path) -> bool:
     return header[:4] == b"RIFF" and header[8:12] == b"WEBP"  # WebP
 
 
+# A genuine browser screenshot is viewport-sized; reject degenerate tiny images
+# (e.g. a hand-painted 1x1 PNG) that carry no real visual evidence.
+MIN_SCREENSHOT_DIM = 64
+MIN_SCREENSHOT_BYTES = 1024
+
+
+def image_dimensions(path: Path) -> tuple[int, int] | None:
+    """Best-effort width/height for PNG/GIF/BMP. None when not determinable."""
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(32)
+    except OSError:
+        return None
+    if head.startswith(b"\x89PNG\r\n\x1a\n") and len(head) >= 24:
+        return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+    if head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
+        return int.from_bytes(head[6:8], "little"), int.from_bytes(head[8:10], "little")
+    if head[:2] == b"BM" and len(head) >= 26:
+        return int.from_bytes(head[18:22], "little"), int.from_bytes(head[22:26], "little")
+    return None
+
+
+def screenshot_is_substantive(path: Path) -> tuple[bool, str]:
+    """A real screenshot must be reasonably sized. Use dimensions when we can
+    parse them, otherwise fall back to a byte-size floor."""
+    dims = image_dimensions(path)
+    if dims is not None:
+        width, height = dims
+        if min(width, height) < MIN_SCREENSHOT_DIM:
+            return False, f"screenshot is too small ({width}x{height}; need >= {MIN_SCREENSHOT_DIM}px each side)"
+        return True, ""
+    if path.stat().st_size < MIN_SCREENSHOT_BYTES:
+        return False, f"screenshot is too small ({path.stat().st_size} bytes; need >= {MIN_SCREENSHOT_BYTES})"
+    return True, ""
+
+
 def resolve_artifact(root: Path, value: str) -> Path:
     path = Path(value).expanduser()
     return path if path.is_absolute() else root / path
@@ -796,6 +832,9 @@ def browser_artifact_ok(root: Path, evidence: list[dict]) -> tuple[bool, str]:
                 return False, f"screenshot artifact is empty: {screenshot}"
             if not is_valid_image(path):
                 return False, f"screenshot artifact is not a valid image: {screenshot}"
+            substantive, reason = screenshot_is_substantive(path)
+            if not substantive:
+                return False, reason
             found = True
         proof = item.get("proof")
         if proof:
@@ -1277,6 +1316,9 @@ def command_browser_proof(args: argparse.Namespace) -> int:
             raise SystemExit(f"screenshot is empty: {screenshot_path}")
         if not is_valid_image(screenshot_path):
             raise SystemExit(f"screenshot is not a valid image (PNG/JPEG/GIF/WebP/BMP): {screenshot_path}")
+        substantive, reason = screenshot_is_substantive(screenshot_path)
+        if not substantive:
+            raise SystemExit(reason)
         screenshot_meta = {
             "path": str(screenshot_path),
             "sha256": sha256_file(screenshot_path),
@@ -1803,7 +1845,7 @@ def command_audit(args: argparse.Namespace) -> int:
 
 def command_final_check(args: argparse.Namespace) -> int:
     root = find_root(Path.cwd())
-    audit_args = argparse.Namespace(warn_only=args.warn_only)
+    audit_args = argparse.Namespace(warn_only=args.warn_only, strict=getattr(args, "strict", False))
     code = command_audit(audit_args)
     if args.todo_log:
         command_todo_log(argparse.Namespace(md=True))
@@ -2051,6 +2093,7 @@ def main() -> int:
 
     final_check = sub.add_parser("final-check")
     final_check.add_argument("--warn-only", action="store_true")
+    final_check.add_argument("--strict", action="store_true", help="Exit non-zero on any high-severity issue")
     final_check.add_argument("--todo-log", action="store_true")
     final_check.set_defaults(func=command_final_check)
 

@@ -12,6 +12,8 @@ import shlex
 import sys
 
 HOME_PREFIXES = ("~", "$HOME", "${HOME}")
+# Command interpreters whose `-c "<cmd>"` argument is itself a command to analyze.
+INTERPRETERS = {"bash", "sh", "zsh", "dash", "ksh", "fish", "ash"}
 # rm targets that are catastrophic regardless of being absolute.
 DANGEROUS_RM_TARGETS = {"/", "/*", "*", ".", "..", "./", "/.", "/*/"}
 
@@ -100,6 +102,22 @@ def dangerous_reason(command: str) -> str | None:
                 return "Refuses writing directly to a raw block device."
 
     for segment in _split_segments(tokens):
+        # Recurse into interpreter/eval payloads so `bash -c "rm -rf /"`,
+        # `sh -c '...'`, and `eval "..."` are analyzed as the command they run.
+        for idx, token in enumerate(segment):
+            base = token.rsplit("/", 1)[-1]
+            rest = segment[idx + 1:]
+            if base in INTERPRETERS and "-c" in rest:
+                ci = rest.index("-c")
+                if ci + 1 < len(rest):
+                    inner = dangerous_reason(rest[ci + 1])
+                    if inner:
+                        return inner
+            if base == "eval" and rest:
+                inner = dangerous_reason(" ".join(rest))
+                if inner:
+                    return inner
+
         # Scan every token as a possible command name so leading wrappers (sudo,
         # env VAR=val, nice, xargs, ...) don't hide the real command. Quoted text
         # stays a single token, so dangerous words used as *data* never match.

@@ -82,5 +82,15 @@ class TestDoneCommitOrdering(unittest.TestCase):
             self.assertIn("- [x]", (root / "TODO.md").read_text())
 
 
+class TestFinalCheckStrict(unittest.TestCase):
+    def test_final_check_accepts_strict_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(tmp, "- [ ] something to do\n")
+            result = mct_run(root, "final-check", "--strict")
+            # Must not be an argparse crash (exit 2); 0 or 1 are valid audit outcomes.
+            self.assertIn(result.returncode, (0, 1), result.stderr)
+            self.assertNotIn("unrecognized arguments", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

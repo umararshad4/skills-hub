@@ -140,3 +140,4 @@ _The loop appends a one-line note per iteration: which AC advanced and the verif
 - AC6: logging on stderr (MCT_DEBUG=1 for debug); all 10 except blocks now log; corrupt state/config emit warnings. 88 tests green.
 - AC7: malformed/empty TODO lines warn instead of silently dropping; dependency resolver matches unambiguous bare tokens so mutual deps form cycle-detectable edges. 92 tests green.
 - AC9: added 'What Is Enforced vs Advisory' to README (+ pointers in AGENTS.md/MCT.md); CHANGELOG maintained; VERSION 2.0.0.
+- Post-audit hardening: guard recurses into bash -c/sh -c/eval; final-check --strict fixed; browser-proof rejects tiny images; install.sh backs up global config. 99 tests green.

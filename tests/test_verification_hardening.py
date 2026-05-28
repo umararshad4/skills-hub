@@ -4,16 +4,30 @@ These assert the *fixed* behavior — the fakeability holes are closed — and t
 legitimate evidence is still accepted (no over-blocking).
 """
 import base64
+import struct
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 from mctmod import mct
 
-# A real, minimal 1x1 PNG.
+# A real, minimal 1x1 PNG — a valid image, but NOT a substantive screenshot.
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
+
+
+def make_png(path: Path, width: int, height: int) -> None:
+    """Write a valid solid-gray RGB PNG of the given dimensions (stdlib only)."""
+    def chunk(typ: bytes, data: bytes) -> bytes:
+        body = typ + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit RGB
+    raw = b"".join(b"\x00" + b"\x7f\x7f\x7f" * width for _ in range(height))  # filter byte + pixels
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    path.write_bytes(png)
 
 
 class TestCheckTokenParsing(unittest.TestCase):
@@ -89,6 +103,21 @@ class TestImageValidation(unittest.TestCase):
             p.write_text("not an image")
             self.assertFalse(mct.is_valid_image(p))
 
+    def test_image_dimensions_parsed_for_png(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "big.png"
+            make_png(p, 320, 240)
+            self.assertEqual(mct.image_dimensions(p), (320, 240))
+
+    def test_substantive_rejects_tiny_accepts_real(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tiny = Path(tmp) / "tiny.png"
+            tiny.write_bytes(PNG_BYTES)
+            real = Path(tmp) / "real.png"
+            make_png(real, 128, 128)
+            self.assertFalse(mct.screenshot_is_substantive(tiny)[0])
+            self.assertTrue(mct.screenshot_is_substantive(real)[0])
+
 
 class TestBrowserArtifactOk(unittest.TestCase):
     def _evidence(self, root, rel):
@@ -99,9 +128,17 @@ class TestBrowserArtifactOk(unittest.TestCase):
     def test_real_screenshot_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "shot.png").write_bytes(PNG_BYTES)
-            ok, _ = mct.browser_artifact_ok(root, self._evidence(root, "shot.png"))
-            self.assertTrue(ok)
+            make_png(root / "shot.png", 200, 200)  # viewport-scale, substantive
+            ok, reason = mct.browser_artifact_ok(root, self._evidence(root, "shot.png"))
+            self.assertTrue(ok, reason)
+
+    def test_tiny_1x1_screenshot_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "shot.png").write_bytes(PNG_BYTES)  # valid PNG but 1x1
+            ok, reason = mct.browser_artifact_ok(root, self._evidence(root, "shot.png"))
+            self.assertFalse(ok)
+            self.assertIn("too small", reason)
 
     def test_missing_screenshot_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

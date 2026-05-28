@@ -70,5 +70,17 @@ test suite and red-team regression probes proving the gates cannot be faked.
   human-in-the-loop discipline tooling, not a self-driving autonomous agent.
   AGENTS.md and MCT.md point to it.
 
+- Closed bypasses surfaced by an adversarial re-audit:
+  - The dangerous-command guard now recurses into interpreter payloads, so
+    `bash -c "rm -rf /"`, `sh -c '...'`, and `eval "..."` are analyzed (benign
+    payloads like `bash -c "ls"` still pass).
+  - `mct final-check --strict` is now a registered flag (was an argparse crash,
+    exit 2) and propagates to the audit.
+  - `browser-proof` rejects degenerate screenshots: a screenshot must be a
+    substantive image (>= 64px per side, or >= 1KB when dimensions are
+    unparseable), so a 1x1 painted PNG no longer counts as proof.
+  - `install.sh` backs up an existing global `CLAUDE.md`/`MCT.md`/`settings.json`
+    to a timestamped `.bak` before overwriting, instead of clobbering silently.
+
 ### Notes
 - `VERSION` bumped to `2.0.0`.

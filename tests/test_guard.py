@@ -40,6 +40,10 @@ class TestBlocks(unittest.TestCase):
         "git push origin main -f",
         ":(){ :|:& };:",
         "echo data > /dev/sda",
+        'bash -c "rm -rf /"',
+        "sh -c 'rm -rf /etc'",
+        'eval "rm -rf $HOME"',
+        'bash -c "sudo rm -rf /usr"',
     ]
 
     def test_destructive_commands_are_blocked(self):
@@ -63,6 +67,9 @@ class TestAllows(unittest.TestCase):
         "chmod 644 file.txt",
         "dd if=in.img of=out.img",              # not a device
         "cat /dev/null",
+        'bash -c "ls -la"',                      # benign interpreter payload
+        "sh -c 'npm run build'",
+        'eval "echo hello"',
     ]
 
     def test_benign_commands_are_allowed(self):

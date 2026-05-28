@@ -66,12 +66,35 @@ else
 fi
 rm -rf "$D"
 
-# Allow-cases: legitimate evidence must STILL be accepted (no over-blocking).
-write_png() { python3 - "$1" <<'PY'
+# R3b — a degenerate 1x1 painted PNG must NOT pass as browser proof.
+D="$(new_repo)"
+printf -- '- [ ] polish the pricing hero #ui\n' > "$D/TODO.md"
+python3 - "$D/tiny.png" <<'PY'
 import base64, sys
 open(sys.argv[1], "wb").write(base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 ))
+PY
+if done_accepted "$D" pricing \
+      --browser-evidence 'tool=playwright | url=http://localhost:3000 | viewport=1440x900 | screenshot=tiny.png | result=pass'; then
+  vuln "R3b 1x1 painted PNG accepted as browser proof"
+else
+  ok "R3b degenerate 1x1 screenshot rejected"
+fi
+rm -rf "$D"
+
+# Allow-cases: legitimate evidence must STILL be accepted (no over-blocking).
+# A substantive (viewport-scale) PNG, generated with the stdlib only.
+write_png() { python3 - "$1" <<'PY'
+import struct, sys, zlib
+def chunk(typ, data):
+    body = typ + data
+    return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+w = h = 200
+ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+raw = b"".join(b"\x00" + b"\x7f\x7f\x7f" * w for _ in range(h))
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+open(sys.argv[1], "wb").write(png)
 PY
 }
 allow() { if "$@"; then ok "${ALLOW_LABEL}"; else vuln "${ALLOW_LABEL} (legitimate evidence wrongly rejected)"; fi; }
@@ -119,6 +142,9 @@ probe_guard "R8 mkfs.ext4 /dev/sda1"     '{"tool_input":{"command":"mkfs.ext4 /d
 probe_guard "R9 dd of=/dev/sda"          '{"tool_input":{"command":"dd if=/dev/zero of=/dev/sda"}}'
 probe_guard "R10 find / -delete"         '{"tool_input":{"command":"find / -delete"}}'
 probe_guard "R11 chmod -R 777 /"         '{"tool_input":{"command":"chmod -R 777 /"}}'
+probe_guard "R14 bash -c rm -rf /"       '{"tool_input":{"command":"bash -c \"rm -rf /\""}}'
+probe_guard "R15 sh -c rm -rf /etc"      '{"tool_input":{"command":"sh -c \"rm -rf /etc\""}}'
+probe_guard "R16 eval rm -rf HOME"       '{"tool_input":{"command":"eval \"rm -rf $HOME\""}}'
 
 # Guard must NOT block benign commands merely because dangerous words appear as data.
 guard_allow() {  # label, json-payload
