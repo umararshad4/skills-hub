@@ -95,8 +95,8 @@ checked AND `bash scripts/check.sh` exits 0, with the full output pasted as proo
   fallback emits a warning under `MCT_DEBUG=1`.
 
 ### AC7 — Parser & robustness
-- [ ] Malformed TODO lines handled deterministically and documented (no silent garbage tasks).
-- [ ] Cycle detection works with bare dependency tokens.
+- [x] Malformed TODO lines handled deterministically and documented (no silent garbage tasks).
+- [x] Cycle detection works with bare dependency tokens.
 - Verify: unit tests for malformed lines and for a 2-task mutual-dependency cycle.
 
 ### AC8 — `command_done` ordering / no inconsistent state
@@ -138,3 +138,4 @@ _The loop appends a one-line note per iteration: which AC advanced and the verif
 - AC5/AC8: atomic save_state (tempfile+os.replace); next --claim now consumed (skips in_progress, --reclaim escape); done commits before flipping checkbox. 81 tests green.
 - AC4: git hooks now fail closed (MCT_ALLOW_MISSING=1 to bypass); added mct doctor; run_package_script warns + records skipped. 86 tests green.
 - AC6: logging on stderr (MCT_DEBUG=1 for debug); all 10 except blocks now log; corrupt state/config emit warnings. 88 tests green.
+- AC7: malformed/empty TODO lines warn instead of silently dropping; dependency resolver matches unambiguous bare tokens so mutual deps form cycle-detectable edges. 92 tests green.

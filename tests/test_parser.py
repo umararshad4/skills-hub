@@ -71,6 +71,18 @@ class TestParseTodo(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0].clean_text, "Only real task")
 
+    def test_malformed_checkboxes_are_dropped(self):
+        # `- []` and `-[ ]` are malformed and must not become tasks.
+        _, tasks = parse("- [] missing space\n-[ ] no space after dash\n- [ ] valid one\n")
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].clean_text, "valid one")
+
+    def test_tag_only_task_is_not_created(self):
+        # A checkbox whose text is only tags/metadata has no real task text.
+        _, tasks = parse("- [ ] #ui\n- [ ] real work here\n")
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].clean_text, "real work here")
+
 
 class TestParseMeta(unittest.TestCase):
     def test_comma_and_space_separated(self):

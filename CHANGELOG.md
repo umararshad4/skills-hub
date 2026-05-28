@@ -60,5 +60,10 @@ test suite and red-team regression probes proving the gates cannot be faked.
   state/config/policy corruption, debug for optional files) instead of swallowing
   errors silently.
 
+- TODO parsing now warns on malformed checkbox lines and skips tag-only items
+  with no real task text, instead of silently dropping or creating empty tasks.
+- Dependency resolution matches unambiguous bare tokens (slug words / tags), so
+  mutually dependent tasks form a real, cycle-detectable edge.
+
 ### Notes
 - `VERSION` bumped to `2.0.0`.

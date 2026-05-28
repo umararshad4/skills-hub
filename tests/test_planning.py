@@ -27,6 +27,19 @@ class TestDependencyAnalysis(unittest.TestCase):
         result = mct.dependency_analysis(tasks)
         self.assertTrue(result["cycles"], "expected a cycle to be detected for mutually dependent tasks")
 
+    def test_bare_token_cycle_is_detected(self):
+        # Deps reference non-prefix bare tokens that match a slug word.
+        tasks = parse("- [ ] build alpha depends:beta\n- [ ] ship beta depends:alpha\n")
+        result = mct.dependency_analysis(tasks)
+        self.assertTrue(result["cycles"], "bare-token mutual dependency should still form a detectable cycle")
+
+    def test_ambiguous_bare_token_stays_unresolved(self):
+        # "api" matches two slugs -> ambiguous -> left missing, no invented edge.
+        tasks = parse("- [ ] fix api one files:a.ts\n- [ ] fix api two depends:api\n")
+        result = mct.dependency_analysis(tasks)
+        two = next(t for t in tasks if t.slug == "fix-api-two")
+        self.assertIn("api", result["missing"].get(two.id, []))
+
     def test_unresolvable_dep_is_reported_missing(self):
         tasks = parse("- [ ] alpha depends:does-not-exist\n")
         result = mct.dependency_analysis(tasks)

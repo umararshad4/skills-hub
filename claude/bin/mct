@@ -266,9 +266,16 @@ def parse_todo(root: Path, policy: dict) -> tuple[Path | None, list[TodoTask]]:
     for idx, line in enumerate(path.read_text(errors="ignore").splitlines(), start=1):
         match = re.match(r"^(\s*)[-*]\s+\[([ xX])\]\s+(.+?)\s*$", line)
         if not match:
+            # A line that looks like a checkbox but does not parse is reported,
+            # not silently dropped, so a malformed item is never mistaken as tracked.
+            if re.match(r"^\s*[-*]\s*\[", line):
+                logger.warning("skipping malformed TODO checkbox on line %d: %s", idx, line.strip())
             continue
         done = match.group(2).lower() == "x"
         text = match.group(3).strip()
+        if not clean_task_text(text):
+            logger.warning("skipping TODO line %d with no task text after tags/metadata: %s", idx, line.strip())
+            continue
         tags = [part[1:] for part in re.findall(r"#[A-Za-z0-9_-]+", text)]
         deps = parse_meta(text, "depends")
         files = parse_meta(text, "files")
@@ -301,6 +308,27 @@ def resolve_task(tasks: list[TodoTask], query: str) -> TodoTask | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def resolve_dependency(dep: str, tasks: list[TodoTask], by_id: dict, by_slug: dict) -> TodoTask | None:
+    """Resolve a dependency token to a task.
+
+    Tries exact id/slug, then a unique prefix, then a unique bare-token match
+    against slug words or tags. Ambiguous bare tokens are left unresolved so we
+    never invent a wrong edge — but an unambiguous bare token (the common case)
+    now resolves, so mutual dependencies form a real, cycle-detectable edge.
+    """
+    if dep in by_id:
+        return by_id[dep]
+    if dep in by_slug:
+        return by_slug[dep]
+    prefix = [t for t in tasks if t.id.startswith(dep) or t.slug.startswith(dep)]
+    if len(prefix) == 1:
+        return prefix[0]
+    word = [t for t in tasks if dep in t.slug.split("-") or dep in t.tags]
+    if len(word) == 1:
+        return word[0]
+    return None
+
+
 def dependency_analysis(tasks: list[TodoTask]) -> dict:
     by_id = {task.id: task for task in tasks}
     by_slug = {task.slug: task for task in tasks}
@@ -310,10 +338,10 @@ def dependency_analysis(tasks: list[TodoTask]) -> dict:
     for task in tasks:
         resolved: list[str] = []
         for dep in task.deps:
-            target = by_id.get(dep) or by_slug.get(dep) or next((t for t in tasks if t.id.startswith(dep) or t.slug.startswith(dep)), None)
-            if target:
+            target = resolve_dependency(dep, tasks, by_id, by_slug)
+            if target and target.id != task.id:
                 resolved.append(target.id)
-            else:
+            elif not target:
                 missing.setdefault(task.id, []).append(dep)
         graph[task.id] = resolved
 
