@@ -82,8 +82,8 @@ checked AND `bash scripts/check.sh` exits 0, with the full output pasted as proo
   `mct doctor` output asserted.
 
 ### AC5 — State integrity
-- [ ] `save_state` writes atomically (tempfile + `os.replace`).
-- [ ] `mct next --claim` actually CONSUMES claim state: skips tasks already `in_progress`/`done`
+- [x] `save_state` writes atomically (tempfile + `os.replace`).
+- [x] `mct next --claim` actually CONSUMES claim state: skips tasks already `in_progress`/`done`
       (with a `--reclaim` or TTL escape hatch). No write-only dead fields.
 - Verify: unit tests — atomic write leaves no partial file on simulated failure; a second
   `next --claim` does not re-hand an already-claimed task.
@@ -100,7 +100,7 @@ checked AND `bash scripts/check.sh` exits 0, with the full output pasted as proo
 - Verify: unit tests for malformed lines and for a 2-task mutual-dependency cycle.
 
 ### AC8 — `command_done` ordering / no inconsistent state
-- [ ] Do not flip the TODO checkbox + write the receipt BEFORE a commit that can fail. Either
+- [x] Do not flip the TODO checkbox + write the receipt BEFORE a commit that can fail. Either
       commit first, or roll back the checkbox/state if the commit fails.
 - Verify: unit test simulating commit failure → checkbox NOT flipped, state consistent.
 
@@ -135,3 +135,4 @@ _The loop appends a one-line note per iteration: which AC advanced and the verif
 - AC2: verification hardened (named-equality checks, real image artifacts, run-check); red-team R1/R2/R3 now BLOCKED, allow-cases A1/A2/A3 accepted.
 - AC3: danger guard rewritten with shlex tokenization + command-name scan; R4-R11 BLOCKED, R12/R13 allowed, 75 unit tests green.
 - AC10: added `mct audit --strict`; check.sh now GREEN (unit+redteam+audit); self-CI runs check.sh, vendored template runs strict audit.
+- AC5/AC8: atomic save_state (tempfile+os.replace); next --claim now consumed (skips in_progress, --reclaim escape); done commits before flipping checkbox. 81 tests green.

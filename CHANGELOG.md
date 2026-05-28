@@ -43,5 +43,10 @@ test suite and red-team regression probes proving the gates cannot be faked.
   to raw block devices — while no longer false-positiving on dangerous words
   used as data (e.g. `echo "rm -rf /"`) or relative deletes (`rm -rf dist`).
 
+- `save_state` now writes atomically (serialize, write temp file, `os.replace`),
+  so a crash or serialization error never leaves a truncated `state.json`.
+- `mct next --claim` now consumes the claim record: an already-claimed
+  (`in_progress`) task is not handed out again unless `--reclaim` is passed.
+
 ### Notes
 - `VERSION` bumped to `2.0.0`.

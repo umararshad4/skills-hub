@@ -47,6 +47,27 @@ class TestState(unittest.TestCase):
         self.assertIn("checkHistory", state)
 
 
+class TestAtomicSave(unittest.TestCase):
+    def test_serialization_error_does_not_corrupt_existing_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            good = mct.default_state()
+            good["tasks"]["keep"] = {"status": "done"}
+            mct.save_state(root, good)
+            # A non-serializable value must raise WITHOUT truncating the live file.
+            with self.assertRaises(TypeError):
+                mct.save_state(root, {"tasks": {1, 2, 3}})
+            reloaded = mct.load_state(root)
+            self.assertEqual(reloaded["tasks"]["keep"]["status"], "done")
+
+    def test_no_temp_file_left_behind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mct.save_state(root, mct.default_state())
+            leftovers = list((root / ".mct").glob("state.json.tmp*"))
+            self.assertEqual(leftovers, [])
+
+
 class TestConfig(unittest.TestCase):
     def test_default_config_has_verification_block(self):
         with tempfile.TemporaryDirectory() as tmp:

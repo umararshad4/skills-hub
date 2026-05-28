@@ -212,7 +212,12 @@ def load_state(root: Path) -> dict:
 def save_state(root: Path, state: dict) -> None:
     path = state_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    # Serialize first so a serialization error never truncates the live file,
+    # then swap atomically so a crash mid-write cannot leave a partial state.json.
+    payload = json.dumps(state, indent=2, sort_keys=True) + "\n"
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    tmp.write_text(payload)
+    os.replace(tmp, path)
 
 
 def clean_task_text(text: str) -> str:
@@ -1040,21 +1045,35 @@ def command_start(args: argparse.Namespace) -> int:
     return 0
 
 
+def claimed_task_ids(state: dict) -> set[str]:
+    return {
+        task_id_value
+        for task_id_value, info in state.get("tasks", {}).items()
+        if info.get("status") == "in_progress"
+    }
+
+
 def command_next(args: argparse.Namespace) -> int:
     root = find_root(Path.cwd())
     data = status_data(root)
+    state = load_state(root)
+    claimed = claimed_task_ids(state)
     next_tasks = data["plan"].get("next", [])
+    # A claimed task is not handed out again unless --reclaim is passed. This makes
+    # the claim record an actual coordination primitive rather than a dead field.
+    if not getattr(args, "reclaim", False):
+        next_tasks = [task for task in next_tasks if task["id"] not in claimed]
     if args.claim and next_tasks:
-        state = load_state(root)
         for task in next_tasks:
-            state.setdefault("tasks", {}).setdefault(task["id"], {})
-            state["tasks"][task["id"]].update({"status": "in_progress", "claimedAt": now(), "text": task["clean_text"]})
+            entry = state.setdefault("tasks", {}).setdefault(task["id"], {})
+            entry.update({"status": "in_progress", "claimedAt": now(), "text": task["clean_text"]})
         save_state(root, state)
     print(json.dumps({
         "root": data["root"],
         "mode": data["plan"]["mode"],
         "next": next_tasks,
         "claim": bool(args.claim),
+        "alreadyClaimed": sorted(claimed),
         "recommendedChecks": data["recommendedChecks"],
         "dependencies": data["plan"].get("dependencies", {}),
     }, indent=2))
@@ -1927,6 +1946,7 @@ def main() -> int:
 
     next_cmd = sub.add_parser("next")
     next_cmd.add_argument("--claim", action="store_true")
+    next_cmd.add_argument("--reclaim", action="store_true", help="Re-hand tasks even if already claimed (in_progress)")
     next_cmd.set_defaults(func=command_next)
 
     init = sub.add_parser("init")
