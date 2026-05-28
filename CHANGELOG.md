@@ -48,5 +48,13 @@ test suite and red-team regression probes proving the gates cannot be faked.
 - `mct next --claim` now consumes the claim record: an already-claimed
   (`in_progress`) task is not handed out again unless `--reclaim` is passed.
 
+- Git hooks (`pre-commit`/`pre-push`) now FAIL CLOSED when the `mct` binary is
+  missing (exit non-zero) instead of silently passing; set `MCT_ALLOW_MISSING=1`
+  to bypass intentionally.
+- New `mct doctor` reports whether the repo's git hooks are installed and wired
+  to the enforced path.
+- `run_package_script` logs a visible warning and records a skipped check when a
+  requested npm script is absent, instead of silently reporting success.
+
 ### Notes
 - `VERSION` bumped to `2.0.0`.

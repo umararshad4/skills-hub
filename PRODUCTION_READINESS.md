@@ -72,11 +72,11 @@ checked AND `bash scripts/check.sh` exits 0, with the full output pasted as proo
   unit tests for both block and allow cases.
 
 ### AC4 — Fail-closed enforcement
-- [ ] Git hooks (`claude/git-hooks/pre-commit`, `pre-push`): when `$MCT_BIN` is missing, FAIL
+- [x] Git hooks (`claude/git-hooks/pre-commit`, `pre-push`): when `$MCT_BIN` is missing, FAIL
       CLOSED (non-zero) unless `MCT_ALLOW_MISSING=1` is explicitly set; print a clear message.
-- [ ] Add `mct doctor` that reports whether repo git hooks are installed/active and whether the
+- [x] Add `mct doctor` that reports whether repo git hooks are installed/active and whether the
       enforced path is wired.
-- [ ] `run_package_script` returning 0 for a missing script must LOG a visible warning and record
+- [x] `run_package_script` returning 0 for a missing script must LOG a visible warning and record
       the check as skipped (not silently "passed").
 - Verify: unit test for missing-binary path (hook exits non-zero without the env var, 0 with it);
   `mct doctor` output asserted.
@@ -136,3 +136,4 @@ _The loop appends a one-line note per iteration: which AC advanced and the verif
 - AC3: danger guard rewritten with shlex tokenization + command-name scan; R4-R11 BLOCKED, R12/R13 allowed, 75 unit tests green.
 - AC10: added `mct audit --strict`; check.sh now GREEN (unit+redteam+audit); self-CI runs check.sh, vendored template runs strict audit.
 - AC5/AC8: atomic save_state (tempfile+os.replace); next --claim now consumed (skips in_progress, --reclaim escape); done commits before flipping checkbox. 81 tests green.
+- AC4: git hooks now fail closed (MCT_ALLOW_MISSING=1 to bypass); added mct doctor; run_package_script warns + records skipped. 86 tests green.

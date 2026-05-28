@@ -4,8 +4,13 @@ set -euo pipefail
 MCT_BIN="${MCT_BIN:-$HOME/.claude/bin/mct}"
 
 if [ ! -x "${MCT_BIN}" ]; then
-  echo "MCT pre-commit warning: ${MCT_BIN} not found, skipping MCT checks" >&2
-  exit 0
+  if [ "${MCT_ALLOW_MISSING:-0}" = "1" ]; then
+    echo "MCT pre-commit: ${MCT_BIN} not found; skipping checks (MCT_ALLOW_MISSING=1)." >&2
+    exit 0
+  fi
+  echo "MCT pre-commit: ${MCT_BIN} not found and MCT_ALLOW_MISSING is not set — failing closed." >&2
+  echo "  Set MCT_BIN to your mct path, run 'mct init --project', or export MCT_ALLOW_MISSING=1 to bypass." >&2
+  exit 1
 fi
 
-"${MCT_BIN}" verify --mode pre-commit
+exec "${MCT_BIN}" verify --mode pre-commit

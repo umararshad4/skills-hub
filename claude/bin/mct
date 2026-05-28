@@ -1791,6 +1791,7 @@ def is_react_project(root: Path) -> bool:
 
 def run_package_script(root: Path, name: str) -> int:
     if not package_has_script(root, name):
+        logger.warning("package script %r not found; skipping (recorded as skipped, not passed)", name)
         return 0
     if (root / "pnpm-lock.yaml").exists():
         cmd = ["pnpm", "run", name]
@@ -1818,17 +1819,22 @@ def command_verify(args: argparse.Namespace) -> int:
         if proc.returncode != 0:
             failures.append("react-doctor-diff failed")
 
-    if args.mode in ("pre-push", "ci") and package_has_script(root, "typecheck"):
-        print("MCT verify: running typecheck", file=sys.stderr)
-        if run_package_script(root, "typecheck") != 0:
-            failures.append("typecheck failed")
+    skipped: list[str] = []
+    if args.mode in ("pre-push", "ci"):
+        if package_has_script(root, "typecheck"):
+            print("MCT verify: running typecheck", file=sys.stderr)
+            if run_package_script(root, "typecheck") != 0:
+                failures.append("typecheck failed")
+        elif "typescript" in surfaces:
+            logger.warning("typecheck not run: no typecheck script in package.json")
+            skipped.append("typecheck=no typecheck script in package.json")
 
     receipt = {
         "at": now(),
         "summary": f"mct verify {args.mode}",
         "completedTasks": [],
         "checksRun": recommend_checks(root, surfaces),
-        "checksSkipped": [],
+        "checksSkipped": skipped,
         "risks": failures,
         "changedFiles": git_files(root),
         "stagedFiles": git_files(root, staged=True),
@@ -1893,6 +1899,40 @@ def command_init(args: argparse.Namespace) -> int:
         if args.ci:
             result["ci"] = install_ci(root)
     print(json.dumps(result, indent=2))
+    return 0
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    hooks_dir = root / ".git" / "hooks"
+    source_dir = claude_root() / "git-hooks"
+    mct_bin = claude_root() / "bin" / "mct"
+    git_hooks = {}
+    for name in ("pre-commit", "pre-push"):
+        target = hooks_dir / name
+        source = source_dir / name
+        installed = target.exists()
+        wired = bool(
+            installed
+            and source.exists()
+            and target.read_text(errors="ignore") == source.read_text(errors="ignore")
+        )
+        git_hooks[name] = {"installed": installed, "mctWired": wired}
+    enforced = bool(git_hooks) and all(hook["mctWired"] for hook in git_hooks.values())
+    report = {
+        "root": str(root),
+        "isGitRepo": (root / ".git").exists(),
+        "mctBin": str(mct_bin),
+        "mctBinExecutable": mct_bin.exists(),
+        "gitHooks": git_hooks,
+        "enforcedPathActive": enforced,
+        "hint": (
+            "Git hooks are wired; commits/pushes run mct verify."
+            if enforced
+            else "Run 'mct init --project' to install fail-closed git hooks into this repo."
+        ),
+    }
+    print(json.dumps(report, indent=2))
     return 0
 
 
@@ -2048,6 +2088,8 @@ def main() -> int:
     self_update = sub.add_parser("self-update")
     self_update.add_argument("--no-pull", action="store_true", help="Install from local source without pulling")
     self_update.set_defaults(func=command_self_update)
+
+    sub.add_parser("doctor").set_defaults(func=command_doctor)
 
     args = parser.parse_args()
     return args.func(args)
