@@ -3,6 +3,7 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -13,7 +14,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "1.9.0"
+VERSION = "2.0.0"
+
+# Observability: warnings are surfaced on stderr (never stdout, which carries the
+# machine-readable JSON). Set MCT_DEBUG=1 for verbose/debug output.
+logging.basicConfig(
+    level=logging.DEBUG if os.environ.get("MCT_DEBUG") else logging.WARNING,
+    format="mct: %(levelname)s: %(message)s",
+    stream=sys.stderr,
+)
+logger = logging.getLogger("mct")
 DEFAULT_POLICY = {
     "todoQueue": {
         "fileName": "TODO.md",
@@ -535,23 +545,119 @@ def task_required_checks(task: TodoTask, root: Path) -> list[str]:
     return list(dict.fromkeys(required))
 
 
-def check_satisfies(required: str, checks: list[str], skipped: list[str]) -> bool:
-    names = " ".join([*checks, *skipped]).lower()
-    aliases = {
-        "diff-review": ("diff", "review"),
-        "browser-proof": ("browser", "playwright", "chrome", "screenshot", "responsive", "visual"),
-        "react-doctor": ("react-doctor",),
-        "api-behavior-check": ("api", "route", "endpoint", "curl", "integration"),
-        "negative-path-check": ("negative", "security", "auth", "permission", "webhook", "payment"),
-        "typecheck": ("typecheck", "tsc"),
-    }
-    return any(alias in names for alias in aliases.get(required, (required,)))
+# Map the recognized check tokens to their canonical required-check name. A token
+# only resolves if it equals the canonical name or one of these exact aliases —
+# never by loose substring matching over a free-text blob.
+CANONICAL_CHECK_ALIASES = {
+    "diff-review": ("diff-review", "diff", "review"),
+    "browser-proof": ("browser-proof", "browser", "playwright", "chrome", "screenshot", "visual", "responsive", "ui-check"),
+    "react-doctor": ("react-doctor", "reactdoctor", "react-doctor-diff"),
+    "api-behavior-check": ("api-behavior-check", "api-behavior", "api-check"),
+    "negative-path-check": ("negative-path-check", "negative-path", "negativepath"),
+    "typecheck": ("typecheck", "tsc", "type-check"),
+    "test": ("test", "tests", "unit-test", "unit-tests", "targeted-tests"),
+}
+
+# Required checks that can be executed deterministically. For these a bare
+# self-reported claim is NOT accepted as proof: they must be executed (recorded
+# with executed=true and a pass result) or explicitly skipped with a reason.
+AUTO_EXECUTABLE_CHECKS = {"typecheck", "react-doctor", "test"}
 
 
+def canonical_check_name(token: str) -> str:
+    token = (token or "").strip().lower()
+    for canon, aliases in CANONICAL_CHECK_ALIASES.items():
+        if token == canon or token in aliases:
+            return canon
+    return token
+
+
+def parse_check_token(item: str) -> tuple[str, str]:
+    """Split a `--check` token into (canonical_name, detail).
+
+    Accepts `name`, `name=detail`, or `name:detail`. Only a leading single token
+    (letters/digits/_/-) before a `=`/`:` is treated as the name.
+    """
+    raw = (item or "").strip()
+    match = re.match(r"^([A-Za-z0-9_-]+)\s*[=:]\s*(.+)$", raw, re.DOTALL)
+    if match:
+        return canonical_check_name(match.group(1)), match.group(2).strip()
+    return canonical_check_name(raw), ""
+
+
+def parse_skip_token(item: str) -> tuple[str, str]:
+    """A skip must be `name=reason` (or `name:reason`) with a non-empty reason.
+
+    A bare free-text skip resolves to no known check name and an empty reason, so
+    it cannot satisfy any required check.
+    """
+    return parse_check_token(item)
+
+
+def requirement_satisfied(
+    required: str,
+    provided: list[tuple[str, str]],
+    skips: list[tuple[str, str]],
+    executed: list[dict],
+    artifact_ok: bool,
+) -> bool:
+    # An executed, passing check is always sufficient.
+    if any(entry.get("name") == required and entry.get("result") == "pass" for entry in executed):
+        return True
+    # An explicit, named skip carrying a concrete reason.
+    if any(name == required and reason for name, reason in skips):
+        return True
+    # Browser proof is satisfied only by a real artifact (verified separately),
+    # never by a free-text evidence string.
+    if required == "browser-proof":
+        return bool(artifact_ok)
+    # Deterministically runnable checks must be executed, not merely claimed.
+    if required in AUTO_EXECUTABLE_CHECKS:
+        return False
+    # Other checks (negative-path-check, api-behavior-check, diff-review) accept an
+    # explicit, named self-report that carries concrete detail.
+    return any(name == required and detail for name, detail in provided)
+
+
+def unmet_required_checks(
+    task: TodoTask,
+    root: Path,
+    checks: list[str] | None,
+    skipped: list[str] | None,
+    executed: list[dict] | None = None,
+    artifact_ok: bool = False,
+) -> list[str]:
+    provided = [parse_check_token(item) for item in (checks or [])]
+    skips = [parse_skip_token(item) for item in (skipped or [])]
+    executed = executed or []
+    return [
+        required
+        for required in task_required_checks(task, root)
+        if not requirement_satisfied(required, provided, skips, executed, artifact_ok)
+    ]
+
+
+# Backwards-compatible name retained for any external callers.
 def missing_required_checks(task: TodoTask, root: Path, checks: list[str] | None, skipped: list[str] | None) -> list[str]:
-    check_list = checks or []
-    skipped_list = skipped or []
-    return [required for required in task_required_checks(task, root) if not check_satisfies(required, check_list, skipped_list)]
+    return unmet_required_checks(task, root, checks, skipped)
+
+
+def unmet_checks_message(unmet: list[str], artifact_reason: str = "") -> str:
+    parts = ["cannot mark TODO done: unsatisfied required checks: " + ", ".join(unmet) + "."]
+    if "browser-proof" in unmet:
+        extra = f" (evidence rejected: {artifact_reason})" if artifact_reason else ""
+        parts.append(
+            "browser-proof needs a real artifact" + extra
+            + ": save a screenshot/proof file and pass --browser-evidence "
+            "'tool=playwright | url=... | viewport=1440x900 | screenshot=.mct/shot.png | result=pass', "
+            "or record --skipped-check browser-proof=<concrete reason>."
+        )
+    for req in unmet:
+        if req in AUTO_EXECUTABLE_CHECKS:
+            parts.append(f"{req} must be executed: pass --run-check {req} (or --skipped-check {req}=<reason>).")
+        elif req != "browser-proof":
+            parts.append(f"{req} needs a named attestation: --check {req}=<concrete evidence> (or --skipped-check {req}=<reason>).")
+    return " ".join(parts)
 
 
 def browser_check_names(checks: list[str] | None) -> list[str]:
@@ -613,6 +719,99 @@ def browser_artifact_issue(root: Path, evidence: list[dict]) -> str:
             if not path.exists():
                 return f"browser proof artifact is missing: {proof}"
     return ""
+
+
+_IMAGE_MAGIC = (
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"\xff\xd8\xff",        # JPEG
+    b"GIF87a",
+    b"GIF89a",
+    b"BM",                  # BMP
+)
+
+
+def is_valid_image(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(16)
+    except OSError:
+        return False
+    if any(header.startswith(magic) for magic in _IMAGE_MAGIC):
+        return True
+    return header[:4] == b"RIFF" and header[8:12] == b"WEBP"  # WebP
+
+
+def resolve_artifact(root: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else root / path
+
+
+def browser_artifact_ok(root: Path, evidence: list[dict]) -> tuple[bool, str]:
+    """A real browser artifact must exist, be non-empty, and (for a screenshot)
+    be a valid image. Returns (ok, reason_if_not_ok)."""
+    found = False
+    for item in evidence:
+        screenshot = item.get("screenshot")
+        if screenshot:
+            path = resolve_artifact(root, screenshot)
+            if not path.exists():
+                return False, f"screenshot artifact is missing: {screenshot}"
+            if path.stat().st_size == 0:
+                return False, f"screenshot artifact is empty: {screenshot}"
+            if not is_valid_image(path):
+                return False, f"screenshot artifact is not a valid image: {screenshot}"
+            found = True
+        proof = item.get("proof")
+        if proof:
+            path = resolve_artifact(root, proof)
+            if not path.exists():
+                return False, f"browser proof artifact is missing: {proof}"
+            if path.stat().st_size == 0:
+                return False, f"browser proof artifact is empty: {proof}"
+            found = True
+    if not found:
+        return False, "browser evidence references no real artifact (need screenshot= or proof= pointing to an existing file)"
+    return True, ""
+
+
+def run_named_check(root: Path, name: str) -> dict:
+    """Execute a deterministic check and record its real exit code.
+
+    Returns a structured result. `executed` is False when no runner is available
+    for the check in this project (e.g. no typecheck script), in which case the
+    check is neither pass nor fail and cannot satisfy a requirement on its own.
+    """
+    canon = canonical_check_name(name)
+    command: list[str] | None = None
+    if canon == "react-doctor":
+        if shutil.which("npx"):
+            command = ["npx", "-y", "react-doctor@latest", ".", "--diff"]
+    elif canon in ("typecheck", "test"):
+        if package_has_script(root, canon):
+            if (root / "pnpm-lock.yaml").exists():
+                command = ["pnpm", "run", canon]
+            elif (root / "yarn.lock").exists():
+                command = ["yarn", canon]
+            else:
+                command = ["npm", "run", canon]
+    if command is None:
+        logger.warning("no runner available for check %r in %s", canon, root)
+        return {
+            "name": canon,
+            "executed": False,
+            "result": "unavailable",
+            "reason": f"no runner available for {canon} in this project",
+            "at": now(),
+        }
+    proc = subprocess.run(command, cwd=str(root))
+    return {
+        "name": canon,
+        "executed": True,
+        "command": " ".join(command),
+        "exitCode": proc.returncode,
+        "result": "pass" if proc.returncode == 0 else "fail",
+        "at": now(),
+    }
 
 
 def task_plan(tasks: list[TodoTask]) -> dict:
@@ -1021,6 +1220,10 @@ def command_browser_proof(args: argparse.Namespace) -> int:
             screenshot_path = root / screenshot_path
         if not screenshot_path.exists():
             raise SystemExit(f"screenshot not found: {screenshot_path}")
+        if screenshot_path.stat().st_size == 0:
+            raise SystemExit(f"screenshot is empty: {screenshot_path}")
+        if not is_valid_image(screenshot_path):
+            raise SystemExit(f"screenshot is not a valid image (PNG/JPEG/GIF/WebP/BMP): {screenshot_path}")
         screenshot_meta = {
             "path": str(screenshot_path),
             "sha256": sha256_file(screenshot_path),
@@ -1072,10 +1275,24 @@ def update_todo_checkbox(todo_path: Path, line_no: int) -> None:
     todo_path.write_text("\n".join(lines) + "\n")
 
 
+def command_run_check(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    results = [run_named_check(root, name) for name in args.name]
+    state = load_state(root)
+    state.setdefault("checkHistory", []).extend(results)
+    save_state(root, state)
+    rc = 1 if any(r.get("executed") and r.get("result") != "pass" for r in results) else 0
+    print(json.dumps({"results": results, "ok": rc == 0}, indent=2))
+    return rc
+
+
 def command_done(args: argparse.Namespace) -> int:
     root = find_root(Path.cwd())
-    if not args.check and not args.skipped_check:
-        raise SystemExit("mct done requires at least one --check or --skipped-check reason before marking TODO complete")
+    has_input = bool(args.check or args.skipped_check or args.browser_evidence or getattr(args, "run_check", None))
+    if not has_input:
+        raise SystemExit(
+            "mct done requires at least one --check, --run-check, --skipped-check, or --browser-evidence before marking a TODO complete"
+        )
     policy = load_policy()
     todo_path, tasks = parse_todo(root, policy)
     if not todo_path:
@@ -1083,73 +1300,86 @@ def command_done(args: argparse.Namespace) -> int:
     task = resolve_task(tasks, args.task)
     if not task:
         raise SystemExit(f"Could not resolve task: {args.task}")
-    browser_checks = browser_check_names(args.check)
-    browser_evidence_ok, browser_evidence_reason = valid_browser_evidence(args.browser_evidence)
-    if is_ui_task(task) and not args.skipped_check:
-        if not browser_checks:
-            raise SystemExit(
-                "UI/browser TODOs require a Playwright/Chrome/browser check before completion. "
-                "Run browser verification and pass --check plus --browser-evidence, or pass --skipped-check with a concrete blocker."
-            )
-        if not browser_evidence_ok:
-            raise SystemExit(
-                "UI/browser TODOs require evidence-grade browser verification before completion: "
-                f"{browser_evidence_reason}. Example: --browser-evidence "
-                "'tool=playwright-mcp | url=http://localhost:3000/pricing | viewport=1440x900,390x844 | result=pass'"
-            )
-    missing_checks = missing_required_checks(task, root, args.check, args.skipped_check)
-    if missing_checks:
+
+    # Execute any checks the caller asked us to run for real, and record them.
+    executed_results = [run_named_check(root, name) for name in (getattr(args, "run_check", None) or [])]
+    if executed_results:
+        state = load_state(root)
+        state.setdefault("checkHistory", []).extend(executed_results)
+        save_state(root, state)
+    failed = [r for r in executed_results if r.get("executed") and r.get("result") != "pass"]
+    if failed:
         raise SystemExit(
-            "TODO completion is missing required checks for this task type: "
-            + ", ".join(missing_checks)
-            + ". Run the checks or record a concrete --skipped-check reason."
+            "cannot mark TODO done: executed check(s) failed: "
+            + ", ".join(f"{r['name']} (exit {r.get('exitCode')})" for r in failed)
         )
-    if not task.done:
-        update_todo_checkbox(todo_path, task.line)
-    state = load_state(root)
-    state.setdefault("tasks", {}).setdefault(task.id, {})
-    state["tasks"][task.id].update({
-        "status": "done",
-        "completedAt": now(),
-        "text": task.clean_text,
-        "checks": args.check or [],
-        "browserEvidence": parse_browser_evidence(args.browser_evidence),
-    })
-    save_state(root, state)
+
+    # Browser proof must reference a real artifact, not just a formatted string.
+    evidence = parse_browser_evidence(args.browser_evidence)
+    artifact_ok, artifact_reason = False, ""
+    if evidence:
+        shape_ok, shape_reason = valid_browser_evidence(args.browser_evidence)
+        if shape_ok:
+            artifact_ok, artifact_reason = browser_artifact_ok(root, evidence)
+        else:
+            artifact_reason = shape_reason
+
+    unmet = unmet_required_checks(task, root, args.check, args.skipped_check, executed_results, artifact_ok)
+    if unmet:
+        raise SystemExit(unmet_checks_message(unmet, artifact_reason))
+
     receipt = {
         "at": now(),
         "summary": args.summary or f"completed {task.clean_text}",
         "completedTasks": [task.id],
         "checksRun": args.check or [],
         "checksSkipped": args.skipped_check or [],
-        "browserEvidence": parse_browser_evidence(args.browser_evidence),
+        "executedChecks": executed_results,
+        "browserEvidence": evidence,
         "risks": args.risk or [],
         "changedFiles": git_files(root),
         "stagedFiles": git_files(root, staged=True),
     }
-    receipt_path = append_receipt(root, receipt)
+
+    # Commit BEFORE flipping the checkbox so a failed commit never leaves the
+    # TODO marked done-but-uncommitted.
     commit_result = None
+    commit_payload = None
     if args.commit:
         subject = args.message or commit_subject(task, args.summary)
-        body = commit_body(task, args.check or [], args.skipped_check or [], receipt_path.relative_to(root))
+        body = commit_body(task, args.check or [], args.skipped_check or [], None)
         commit_result = git_commit(root, subject, body, args.all)
         if commit_result.get("ok"):
-            commit_payload = {
-                "commit": {
-                    "sha": commit_result.get("sha"),
-                    "subject": commit_result.get("subject"),
-                }
-            }
-            update_receipt(receipt_path, commit_payload)
-            state = load_state(root)
-            state.setdefault("tasks", {}).setdefault(task.id, {})
-            state["tasks"][task.id]["commit"] = commit_payload["commit"]
-            for run_item in state.get("runs", []):
-                if run_item.get("receipt") == str(receipt_path.relative_to(root)):
-                    run_item["commit"] = commit_payload["commit"]
-            save_state(root, state)
+            commit_payload = {"commit": {"sha": commit_result.get("sha"), "subject": commit_result.get("subject")}}
         elif not args.allow_no_commit:
-            raise SystemExit(f"commit failed after TODO completion: {commit_result.get('reason') or commit_result.get('stderr')}")
+            raise SystemExit(
+                "commit failed; TODO left unchanged: "
+                + (commit_result.get("reason") or commit_result.get("stderr") or "unknown error")
+            )
+
+    # The task is genuinely complete past this point: flip the checkbox, write the
+    # receipt, and persist state.
+    if not task.done:
+        update_todo_checkbox(todo_path, task.line)
+    if commit_payload:
+        receipt.update(commit_payload)
+    receipt_path = append_receipt(root, receipt)
+    state = load_state(root)
+    task_state = state.setdefault("tasks", {}).setdefault(task.id, {})
+    task_state.update({
+        "status": "done",
+        "completedAt": now(),
+        "text": task.clean_text,
+        "checks": args.check or [],
+        "executedChecks": executed_results,
+        "browserEvidence": evidence,
+    })
+    if commit_payload:
+        task_state["commit"] = commit_payload["commit"]
+        for run_item in state.get("runs", []):
+            if run_item.get("receipt") == str(receipt_path.relative_to(root)):
+                run_item["commit"] = commit_payload["commit"]
+    save_state(root, state)
     print(json.dumps({"done": asdict(task), "todoUpdated": str(todo_path), "receipt": str(receipt_path), "commit": commit_result}, indent=2))
     return 0
 
@@ -1418,7 +1648,12 @@ def command_audit(args: argparse.Namespace) -> int:
                 "message": f"TODO item is checked but has no matching receipt: {task.clean_text}",
             })
             continue
-        missing = missing_required_checks(task, root, receipt.get("checksRun", []), receipt.get("checksSkipped", []))
+        receipt_evidence = receipt.get("browserEvidence", []) or []
+        artifact_ok = browser_artifact_ok(root, receipt_evidence)[0] if receipt_evidence else False
+        executed = receipt.get("executedChecks", []) or []
+        missing = unmet_required_checks(
+            task, root, receipt.get("checksRun", []), receipt.get("checksSkipped", []), executed, artifact_ok
+        )
         if missing:
             issues.append({
                 "severity": "high",
@@ -1754,10 +1989,15 @@ def main() -> int:
     receipt.add_argument("--risk", action="append")
     receipt.set_defaults(func=command_receipt)
 
+    run_check = sub.add_parser("run-check")
+    run_check.add_argument("name", nargs="+", help="Checks to execute for real, e.g. typecheck test react-doctor")
+    run_check.set_defaults(func=command_run_check)
+
     done = sub.add_parser("done")
     done.add_argument("task")
     done.add_argument("--summary", default="")
     done.add_argument("--check", action="append")
+    done.add_argument("--run-check", action="append", help="Execute a check for real (typecheck/test/react-doctor) and require it to pass")
     done.add_argument("--skipped-check", action="append")
     done.add_argument(
         "--browser-evidence",
