@@ -2,7 +2,20 @@
 
 All notable changes to the MCT toolkit are documented here.
 
-## [3.0.0] - unreleased (autonomy: the `mct run` control loop)
+## [3.1.0] - 2026-05-29
+
+Hardening and safety release on top of the 3.0.0 autonomy work.
+
+- **Removed unsafe outbound reporting** — `mct report-issue` is now local-only and
+  never sends (regex redaction could not safely scrub arbitrary crash data before
+  publishing to a public repo).
+- **`mct run` hardened** across three adversarial red-team rounds (no known
+  criticals): RCE closed, no false/duplicate completion, scoped commits, secret
+  blocking, gate keyed off the agent's real changed files. Labeled **experimental**
+  with documented remaining edges.
+- Synced `automation-policy.json` to the toolkit version.
+
+## [3.0.0] - 2026-05-29 (autonomy: the `mct run` control loop)
 
 Adds a genuine in-code control loop. Previously `mct` was a one-shot dispatcher
 and the "loop" lived only in advisory markdown; now it lives in code.

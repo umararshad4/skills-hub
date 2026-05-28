@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 
 # Observability: warnings are surfaced on stderr (never stdout, which carries the
 # machine-readable JSON). Set MCT_DEBUG=1 for verbose/debug output.
