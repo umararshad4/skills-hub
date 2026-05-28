@@ -14,13 +14,22 @@ class TestNoSilentSwallow(unittest.TestCase):
     def test_every_except_block_logs(self):
         lines = MCT.read_text().splitlines()
         for i, line in enumerate(lines):
-            if line.strip().startswith("except Exception"):
-                following = [l for l in lines[i + 1:i + 4] if l.strip()]
-                self.assertTrue(following, f"empty except block near line {i + 1}")
-                self.assertIn(
-                    "logger.", following[0],
-                    f"silent swallow near line {i + 1}: {following[0]!r}",
-                )
+            if not line.strip().startswith("except Exception"):
+                continue
+            indent = len(line) - len(line.lstrip())
+            body = []
+            for following in lines[i + 1:]:
+                if not following.strip():
+                    continue
+                if (len(following) - len(following.lstrip())) <= indent:
+                    break  # dedented out of the except block
+                body.append(following)
+            blob = "\n".join(body)
+            # An except block must log or re-raise somewhere — never silently swallow.
+            self.assertTrue(
+                "logger." in blob or "raise" in blob,
+                f"silent swallow in except block near line {i + 1}: {blob!r}",
+            )
 
 
 class TestCorruptStateWarns(unittest.TestCase):

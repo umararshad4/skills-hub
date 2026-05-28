@@ -5,12 +5,14 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import re
 import shlex
 import shutil
 import subprocess
 import sys
 import time
+import traceback
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -160,6 +162,13 @@ def default_config(root: Path) -> dict:
             "requireCommitForTodoWorkflow": True,
             "typecheckScripts": [name for name in ("typecheck", "tsc") if name in stack["scripts"]],
             "testScripts": [name for name in ("test", "test:unit", "e2e", "test:e2e") if name in stack["scripts"]],
+        },
+        # Self-improvement contribute-back. OFF by default: nothing leaves the
+        # machine until a human runs `mct report-issue --enable --confirm`.
+        "selfImprove": {
+            "enabled": False,
+            "upstreamRepo": "umararshad4/skills-hub",
+            "mode": "issue",  # issue-only; auto-fix PRs are not implemented
         },
     }
 
@@ -1775,16 +1784,209 @@ def command_commit(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+# Broadened secret detection — shared by the staged-diff scanner and the
+# self-improvement report redaction/tripwire.
+SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),                                  # AWS access key id
+    re.compile(r"gh[posru]_[A-Za-z0-9]{20,}"),                        # GitHub tokens
+    re.compile(r"glpat-[A-Za-z0-9_-]{20,}"),                          # GitLab
+    re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}"),                      # Slack
+    re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),  # JWT
+    re.compile(r"(?i)(api[_-]?key|secret|token|password|passwd|pwd)\s*[:=]\s*['\"][^'\"]{8,}['\"]"),
+]
+
+
+def detect_secret(text: str) -> bool:
+    return any(pattern.search(text or "") for pattern in SECRET_PATTERNS)
+
+
 def has_secret_in_staged(root: Path) -> tuple[bool, str]:
     files = git_files(root, staged=True)
-    secret_file = re.compile(r"(^|/)\.env$|\.pem$|\.key$|id_rsa|id_ed25519")
+    secret_file = re.compile(r"(^|/)\.env(\.|$)|\.pem$|\.key$|id_rsa|id_ed25519")
     for file in files:
         if secret_file.search(file):
             return True, f"possible secret/private key file staged: {file}"
     proc = run(["git", "diff", "--cached"], root)
-    if proc.returncode == 0 and re.search(r"sk-[A-Za-z0-9_-]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----", proc.stdout):
+    if proc.returncode == 0 and detect_secret(proc.stdout):
         return True, "possible secret found in staged diff"
     return False, ""
+
+
+# ---------------------------------------------------------------------------
+# Self-improvement: local crash capture + opt-in, redacted upstream issue
+# ---------------------------------------------------------------------------
+
+UPSTREAM_REPO = "umararshad4/skills-hub"  # canonical toolkit repo (anti-SSRF pin)
+REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
+MAX_TRACE_FRAMES = 12
+MAX_REPORT_CHARS = 6000
+
+
+def scrub_text(text: str) -> str:
+    """Redact secrets and user/home paths from text destined for a report."""
+    if not text:
+        return text or ""
+    home = str(Path.home())
+    if home:
+        text = text.replace(home, "~")
+    text = re.sub(r"/Users/[^/\s]+", "/Users/<user>", text)
+    text = re.sub(r"/home/[^/\s]+", "/home/<user>", text)
+    for pattern in SECRET_PATTERNS:
+        text = pattern.sub("<redacted-secret>", text)
+    return text[:MAX_REPORT_CHARS]
+
+
+def error_signature(exc_type_name: str, message: str) -> str:
+    basis = f"{exc_type_name}:{scrub_text(message)[:200]}"
+    return hashlib.sha1(basis.encode()).hexdigest()[:12]
+
+
+def build_crash_report(exc: BaseException, tb_text: str) -> dict:
+    # Allowlist only — never an os.environ dump, cwd, repo name, or file contents.
+    frames = "\n".join(tb_text.splitlines()[-MAX_TRACE_FRAMES * 2:])
+    return {
+        "signature": error_signature(type(exc).__name__, str(exc)),
+        "mctVersion": VERSION,
+        "python": platform.python_version(),
+        "os": platform.system(),
+        "errorType": type(exc).__name__,
+        "message": scrub_text(str(exc)),
+        "argv": [scrub_text(arg) for arg in sys.argv[1:]],
+        "traceback": scrub_text(frames),
+        "at": now(),
+    }
+
+
+def crashes_dir(root: Path) -> Path:
+    return root / ".mct" / "crashes"
+
+
+def capture_crash(exc: BaseException, tb_text: str) -> Path | None:
+    """Write a redacted, LOCAL-ONLY crash report. Never sends anything."""
+    if os.environ.get("MCT_NO_CRASH_CAPTURE") == "1":
+        return None
+    try:
+        root = find_root(Path.cwd())
+        report = build_crash_report(exc, tb_text)
+        path = crashes_dir(root) / f"{report['signature']}.json"
+        save_json_atomic(path, report)
+        logger.warning(
+            "mct hit an unexpected error; a local, redacted report was saved to %s "
+            "(view: `mct report-issue --last --print`; nothing was sent)", path,
+        )
+        return path
+    except Exception as exc:
+        logger.debug("crash capture failed (ignored to avoid double-faulting): %s", exc)
+        return None
+
+
+def latest_crash(root: Path) -> Path | None:
+    directory = crashes_dir(root)
+    if not directory.exists():
+        return None
+    reports = sorted(directory.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return reports[0] if reports else None
+
+
+def gh_authed() -> bool:
+    if not shutil.which("gh"):
+        return False
+    # Never authenticate with an ambient token; require an interactive gh login.
+    env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_TOKEN", "GH_TOKEN")}
+    proc = subprocess.run(["gh", "auth", "status"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    return proc.returncode == 0
+
+
+def write_self_improve_enabled(root: Path, enabled: bool) -> None:
+    config = load_config(root)
+    config.setdefault("selfImprove", {})["enabled"] = enabled
+    save_json_atomic(config_path(root), config)
+
+
+def command_report_issue(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    config = load_config(root)
+    si = config.get("selfImprove", {})
+    repo = args.repo or si.get("upstreamRepo") or UPSTREAM_REPO
+
+    if args.enable:
+        if not args.confirm:
+            raise SystemExit(
+                "Enabling outbound reports will send REDACTED crash data to the upstream toolkit repo "
+                f"({repo}) when you run `mct report-issue --open-issue --yes`. Re-run with "
+                "`mct report-issue --enable --confirm` to consent."
+            )
+        write_self_improve_enabled(root, True)
+        print(json.dumps({"selfImprove": "enabled", "upstreamRepo": repo}, indent=2))
+        return 0
+    if args.disable:
+        write_self_improve_enabled(root, False)
+        print(json.dumps({"selfImprove": "disabled"}, indent=2))
+        return 0
+    if args.status:
+        print(json.dumps({
+            "enabled": bool(si.get("enabled")),
+            "upstreamRepo": repo,
+            "ghAuthenticated": gh_authed(),
+            "latestCrash": str(latest_crash(root)) if latest_crash(root) else None,
+        }, indent=2))
+        return 0
+
+    # Load the report to act on.
+    if args.from_crash:
+        report_path = Path(args.from_crash).expanduser()
+    else:
+        report_path = latest_crash(root)
+    if not report_path or not report_path.exists():
+        raise SystemExit("no crash report found; nothing to report (use --from-crash PATH)")
+    try:
+        report = json.loads(report_path.read_text())
+    except Exception:
+        raise SystemExit(f"could not read crash report: {report_path}")
+
+    # Default and --print are local/no-egress.
+    if args.print or not args.open_issue:
+        print(json.dumps(report, indent=2))
+        return 0
+
+    # ---- egress path: every gate must pass, fail-closed ----
+    if not si.get("enabled"):
+        raise SystemExit("outbound reporting is OFF (default). Enable with `mct report-issue --enable --confirm`.")
+    if os.environ.get("MCT_NO_NETWORK") == "1" or os.environ.get("MCT_AUTOREPORT") == "0":
+        raise SystemExit("outbound reporting is hard-disabled by env (MCT_NO_NETWORK / MCT_AUTOREPORT=0).")
+    if not args.yes:
+        raise SystemExit(f"re-run with --yes to send a redacted issue to {repo}.")
+    if not REPO_RE.match(repo):
+        raise SystemExit(f"invalid repo (expected owner/name): {repo}")
+    if not gh_authed():
+        raise SystemExit("gh is not installed/authenticated — cannot open an issue (fails closed).")
+
+    title = f"[mct {report.get('mctVersion')}] {report.get('errorType')}: {str(report.get('message'))[:80]}"
+    body = "Auto-generated redacted MCT crash report.\n\n```json\n" + json.dumps(report, indent=2) + "\n```"
+    # Residual-secret tripwire on the FINAL payload — a redaction miss must never be sent.
+    if detect_secret(title) or detect_secret(body):
+        raise SystemExit("aborting send: residual secret detected in the report payload.")
+
+    # Dedup: skip if an open issue already carries this signature.
+    sig = report.get("signature", "")
+    search = subprocess.run(
+        ["gh", "issue", "list", "-R", repo, "--state", "open", "--search", sig, "--json", "number"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    if search.returncode == 0 and search.stdout.strip() and search.stdout.strip() not in ("[]", ""):
+        print(json.dumps({"deduped": True, "signature": sig, "existing": search.stdout.strip()}, indent=2))
+        return 0
+
+    create = subprocess.run(
+        ["gh", "issue", "create", "-R", repo, "-t", title, "-b", body, "-l", "mct-auto-report"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    if create.returncode != 0:
+        raise SystemExit(f"gh issue create failed: {create.stdout.strip()}")
+    print(json.dumps({"opened": True, "repo": repo, "url": create.stdout.strip()}, indent=2))
+    return 0
 
 
 def package_has_script(root: Path, name: str) -> bool:
@@ -2454,6 +2656,19 @@ def main() -> int:
 
     sub.add_parser("doctor").set_defaults(func=command_doctor)
 
+    report = sub.add_parser("report-issue", help="View, or (opt-in) report, a redacted toolkit crash to the upstream repo")
+    report.add_argument("--enable", action="store_true", help="Opt in to outbound reporting (requires --confirm)")
+    report.add_argument("--confirm", action="store_true")
+    report.add_argument("--disable", action="store_true")
+    report.add_argument("--status", action="store_true")
+    report.add_argument("--last", action="store_true", help="Use the most recent local crash report")
+    report.add_argument("--from-crash", help="Path to a specific crash report JSON")
+    report.add_argument("--print", action="store_true", help="Print the redacted report (no egress)")
+    report.add_argument("--open-issue", action="store_true", help="Open an upstream issue (requires opt-in + gh auth + --yes)")
+    report.add_argument("--repo", help="Override upstream repo (owner/name)")
+    report.add_argument("--yes", action="store_true")
+    report.set_defaults(func=command_report_issue)
+
     run_cmd = sub.add_parser("run", help="Autonomous loop: drain the TODO queue via a pluggable work command")
     run_cmd.add_argument("--agent-cmd", help="Work-step command (overrides MCT_AGENT_CMD / autonomy.agentCommand)")
     run_cmd.add_argument("--max-iterations", type=int)
@@ -2466,7 +2681,16 @@ def main() -> int:
     run_cmd.set_defaults(func=command_run)
 
     args = parser.parse_args()
-    return args.func(args)
+    try:
+        return args.func(args)
+    except SystemExit:
+        # Intentional, user-facing exits (gate failures, bad input) pass through.
+        raise
+    except Exception as exc:
+        # Unexpected toolkit crash: capture a redacted LOCAL report, then re-raise
+        # so the error still surfaces. Nothing is ever sent automatically.
+        capture_crash(exc, traceback.format_exc())
+        raise
 
 
 if __name__ == "__main__":

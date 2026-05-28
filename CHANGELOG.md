@@ -24,10 +24,26 @@ and the "loop" lived only in advisory markdown; now it lives in code.
 - **Crucially, the loop cannot fake completion**: a UI task with no real browser
   proof is blocked, not marked done (regression-tested as AC-RUN).
 
+### Added — self-improvement (local crash capture + opt-in upstream issue)
+- **Local crash capture**: an unexpected `mct` error writes a REDACTED, LOCAL-ONLY
+  report to `.mct/crashes/<sig>.json` and re-raises (the error still surfaces).
+  Allowlisted fields only — never an env dump, cwd, repo name, or file contents.
+  Secrets and home/user paths are scrubbed. `MCT_NO_CRASH_CAPTURE=1` opts out.
+  Intentional `SystemExit`s are never captured.
+- **`mct report-issue`**: view (`--last --print`), `--status`, and — strictly
+  OPT-IN — open a redacted issue upstream (`--open-issue`). Egress is **OFF by
+  default** and fails closed: it requires `mct report-issue --enable --confirm`,
+  `--yes`, an authenticated `gh` (ambient `GITHUB_TOKEN`/`GH_TOKEN` are ignored),
+  passes a residual-secret tripwire on the final payload, is deduped by error
+  signature, and is hard-disabled by `MCT_NO_NETWORK=1`/`MCT_AUTOREPORT=0`. The
+  upstream repo is a pinned constant (anti-SSRF); contribute-back is ISSUE-ONLY
+  (auto-fix PRs are intentionally not implemented).
+- Broadened the secret scanner (AWS/GitHub/GitLab/Slack/JWT/`password=` in
+  addition to `sk-`/PEM), shared by the staged-diff scan and report redaction.
+
 ### Notes
 - `VERSION` → `3.0.0` (the marketed "no autonomous control loop" invariant is
-  reversed). The self-improvement / auto-PR feedback pipeline is designed but not
-  yet shipped (tracked separately; will land off-by-default and consent-gated).
+  reversed).
 
 ## [2.1.0] - unreleased (second-order hardening from adversarial re-audit)
 
