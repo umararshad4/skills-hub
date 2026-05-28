@@ -56,5 +56,9 @@ test suite and red-team regression probes proving the gates cannot be faked.
 - `run_package_script` logs a visible warning and records a skipped check when a
   requested npm script is absent, instead of silently reporting success.
 
+- Every `except Exception` fallback now logs (warnings for MCT's own
+  state/config/policy corruption, debug for optional files) instead of swallowing
+  errors silently.
+
 ### Notes
 - `VERSION` bumped to `2.0.0`.

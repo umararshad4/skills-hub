@@ -105,7 +105,8 @@ def load_policy() -> dict:
         return DEFAULT_POLICY
     try:
         return json.loads(policy_path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.warning("could not parse automation-policy.json; using defaults: %s", exc)
         return DEFAULT_POLICY
 
 
@@ -156,7 +157,8 @@ def load_config(root: Path) -> dict:
         return default_config(root)
     try:
         config = json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.warning("could not parse .mct/config.json; using defaults: %s", exc)
         return default_config(root)
     base = default_config(root)
     for key, value in base.items():
@@ -200,7 +202,8 @@ def load_state(root: Path) -> dict:
         return default_state()
     try:
         state = json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.warning("could not parse .mct/state.json; using defaults: %s", exc)
         return default_state()
     state.setdefault("version", VERSION)
     state.setdefault("tasks", {})
@@ -887,7 +890,8 @@ def load_opensrc_manifest(root: Path) -> dict:
         return {}
     try:
         return json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not parse JSON file; using empty result: %s", exc)
         return {}
 
 
@@ -1182,7 +1186,8 @@ def append_receipt(root: Path, receipt: dict) -> Path:
 def update_receipt(path: Path, updates: dict) -> None:
     try:
         receipt = json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not read receipt to update; skipping: %s", exc)
         return
     receipt.update(updates)
     path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
@@ -1196,7 +1201,8 @@ def load_receipts(root: Path) -> list[tuple[Path, dict]]:
     for path in sorted(directory.glob("*.json")):
         try:
             receipts.append((path, json.loads(path.read_text())))
-        except Exception:
+        except Exception as exc:
+            logger.debug("skipping unreadable receipt: %s", exc)
             continue
     return receipts
 
@@ -1436,7 +1442,8 @@ def package_has_script(root: Path, name: str) -> bool:
         return False
     try:
         package = json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not parse package.json: %s", exc)
         return False
     return name in package.get("scripts", {})
 
@@ -1447,7 +1454,8 @@ def read_package_json(root: Path) -> dict:
         return {}
     try:
         return json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not parse JSON file; using empty result: %s", exc)
         return {}
 
 
@@ -1472,7 +1480,8 @@ def npm_metadata(root: Path, package: str) -> dict:
         return {}
     try:
         data = json.loads(proc.stdout)
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not parse npm metadata: %s", exc)
         return {}
     repo = data.get("repository")
     if isinstance(repo, dict):
@@ -1781,7 +1790,8 @@ def is_react_project(root: Path) -> bool:
         return False
     try:
         package = json.loads(path.read_text())
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not parse package.json: %s", exc)
         return False
     deps = {}
     deps.update(package.get("dependencies", {}))

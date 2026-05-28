@@ -89,8 +89,8 @@ checked AND `bash scripts/check.sh` exits 0, with the full output pasted as proo
   `next --claim` does not re-hand an already-claimed task.
 
 ### AC6 — Observability & error handling
-- [ ] Import `logging`; add `MCT_DEBUG=1` / `-v` to surface logs.
-- [ ] Replace silent `except Exception` blocks so they log at warning level (still graceful).
+- [x] Import `logging`; add `MCT_DEBUG=1` / `-v` to surface logs.
+- [x] Replace silent `except Exception` blocks so they log at warning level (still graceful).
 - Verify: `grep` shows no bare silent swallow without a log call; unit test asserts corrupt-state
   fallback emits a warning under `MCT_DEBUG=1`.
 
@@ -137,3 +137,4 @@ _The loop appends a one-line note per iteration: which AC advanced and the verif
 - AC10: added `mct audit --strict`; check.sh now GREEN (unit+redteam+audit); self-CI runs check.sh, vendored template runs strict audit.
 - AC5/AC8: atomic save_state (tempfile+os.replace); next --claim now consumed (skips in_progress, --reclaim escape); done commits before flipping checkbox. 81 tests green.
 - AC4: git hooks now fail closed (MCT_ALLOW_MISSING=1 to bypass); added mct doctor; run_package_script warns + records skipped. 86 tests green.
+- AC6: logging on stderr (MCT_DEBUG=1 for debug); all 10 except blocks now log; corrupt state/config emit warnings. 88 tests green.
