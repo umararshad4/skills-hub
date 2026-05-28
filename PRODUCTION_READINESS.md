@@ -112,10 +112,11 @@ checked AND `bash scripts/check.sh` exits 0, with the full output pasted as proo
 - Verify: docs contain the "Enforced vs Advisory" section; CHANGELOG present; version bumped.
 
 ### AC10 — One-command check + CI + strict audit
-- [ ] `python3 claude/bin/mct audit --strict` exists and returns non-zero on any high-severity
+- [x] `python3 claude/bin/mct audit --strict` exists and returns non-zero on any high-severity
       issue regardless of `--warn-only`.
-- [ ] `scripts/check.sh` runs unittest + redteam + strict self-audit and exits non-zero on failure.
-- [ ] CI template (`claude/templates/ci/github-actions/mct.yml`) runs `scripts/check.sh`.
+- [x] `scripts/check.sh` runs unittest + redteam + strict self-audit and exits non-zero on failure.
+- [x] CI runs `scripts/check.sh` (skills_hub self-CI at `.github/workflows/ci.yml`); the vendored
+      downstream template runs `mct audit --strict` + `final-check` (check.sh is toolkit-specific).
 - Verify: `bash scripts/check.sh` exits 0 on a healthy tree.
 
 ---
@@ -133,3 +134,4 @@ _The loop appends a one-line note per iteration: which AC advanced and the verif
 - AC1: 70-test stdlib unittest suite added; `python3 -m unittest discover -s tests` green.
 - AC2: verification hardened (named-equality checks, real image artifacts, run-check); red-team R1/R2/R3 now BLOCKED, allow-cases A1/A2/A3 accepted.
 - AC3: danger guard rewritten with shlex tokenization + command-name scan; R4-R11 BLOCKED, R12/R13 allowed, 75 unit tests green.
+- AC10: added `mct audit --strict`; check.sh now GREEN (unit+redteam+audit); self-CI runs check.sh, vendored template runs strict audit.

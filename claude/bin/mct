@@ -1738,7 +1738,11 @@ def command_audit(args: argparse.Namespace) -> int:
         ],
     }
     print(json.dumps(result, indent=2))
-    return 0 if result["ok"] or args.warn_only else 1
+    high_severity = any(issue.get("severity") == "high" for issue in issues)
+    if getattr(args, "strict", False):
+        # Strict mode always fails on a high-severity issue, regardless of warn-only.
+        return 1 if high_severity else 0
+    return 0 if result["ok"] or getattr(args, "warn_only", False) else 1
 
 
 def command_final_check(args: argparse.Namespace) -> int:
@@ -1944,6 +1948,7 @@ def main() -> int:
 
     audit = sub.add_parser("audit")
     audit.add_argument("--warn-only", action="store_true")
+    audit.add_argument("--strict", action="store_true", help="Exit non-zero on any high-severity issue, regardless of --warn-only")
     audit.set_defaults(func=command_audit)
 
     final_check = sub.add_parser("final-check")

@@ -36,4 +36,5 @@ jobs:
 
       - name: Run MCT strict audit
         run: |
+          python3 .github/mct/mct audit --strict
           python3 .github/mct/mct final-check --todo-log
