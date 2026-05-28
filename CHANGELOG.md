@@ -43,6 +43,21 @@ and the "loop" lived only in advisory markdown; now it lives in code.
 - **No orphaned processes**: the agent runs in its own process group and the whole
   group is killed on timeout. The `.mct/STOP` kill-switch can't crash the loop.
 
+### Fixed — deeper bugs from a second red-team round
+- **RCE fully closed**: a committed `.mct/config.json` agent command is now refused
+  even with `--yes`; it requires an explicit `--allow-config-command` opt-in.
+- **No wrong-checkbox completion**: the task's line is re-resolved from a fresh
+  parse before flipping (the agent may shift `TODO.md`); ambiguous → blocked.
+- **Gate keys off the agent's REAL changed files**, not the static `files:`
+  annotation, so an unannotated `.ts`/`.tsx` edit can't escape typecheck/react/UI.
+- **Scoped commits**: the loop stages exactly the agent's delta (never `git add -A`).
+- **Self-improvement redaction hardened** (egress remains OFF by default): whole
+  PEM private-key blocks, `postgres://user:pass@` URL credentials, Google/Stripe/
+  AWS/Bearer secrets, unquoted assignments, and Windows/username paths are now
+  redacted; the `sk-` pattern is token-anchored so it no longer false-positives on
+  words like "ta**sk-**…". Enable-consent moved OUT of the repo (a committed config
+  can't self-grant egress), and the upstream repo is force-pinned (anti-SSRF).
+
 ### Added — self-improvement (local crash capture + opt-in upstream issue)
 - **Local crash capture**: an unexpected `mct` error writes a REDACTED, LOCAL-ONLY
   report to `.mct/crashes/<sig>.json` and re-raises (the error still surfaces).

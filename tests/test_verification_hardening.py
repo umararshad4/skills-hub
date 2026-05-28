@@ -4,6 +4,7 @@ These assert the *fixed* behavior — the fakeability holes are closed — and t
 legitimate evidence is still accepted (no over-blocking).
 """
 import base64
+import json
 import struct
 import tempfile
 import unittest
@@ -226,6 +227,33 @@ class TestUnmetRequiredChecks(unittest.TestCase):
     def test_ui_task_met_with_artifact(self):
         task, root = self._ui_task()
         self.assertEqual(mct.unmet_required_checks(task, root, ["playwright"], [], [], True), [])
+
+
+class TestGateOnChangedFiles(unittest.TestCase):
+    def _plain_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "TODO.md").write_text("- [ ] tidy the helper module\n")  # no files:, generic text
+            _, tasks = mct.parse_todo(root, mct.DEFAULT_POLICY)
+            return tasks[0], root
+
+    def test_unannotated_tsx_change_requires_browser_proof(self):
+        task, root = self._plain_task()
+        required = mct.task_required_checks(task, root, ["src/Hero.tsx"])
+        self.assertIn("browser-proof", required)
+
+    def test_unannotated_ts_change_requires_typecheck_when_script_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "package.json").write_text(json.dumps({"scripts": {"typecheck": "tsc"}}))
+            (root / "TODO.md").write_text("- [ ] tidy the helper module\n")
+            _, tasks = mct.parse_todo(root, mct.DEFAULT_POLICY)
+            required = mct.task_required_checks(tasks[0], root, ["src/util.ts"])
+            self.assertIn("typecheck", required)
+
+    def test_no_change_no_extra_requirements(self):
+        task, root = self._plain_task()
+        self.assertEqual(mct.task_required_checks(task, root, ["README.md"]), [])
 
 
 if __name__ == "__main__":

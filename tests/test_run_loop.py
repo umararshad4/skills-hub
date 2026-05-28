@@ -118,6 +118,34 @@ class TestRedTeamFixes(unittest.TestCase):
             self.assertEqual(result.returncode, 2, "bare mct run must refuse without --yes")
             self.assertFalse((root / "PWNED").exists(), "committed config must NOT achieve clone-and-run RCE")
 
+    def test_committed_config_command_refused_even_with_yes(self):
+        # Round-2 RCE: a committed agentCommand must NOT run on `mct run --yes`
+        # without an explicit --allow-config-command opt-in.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git(root, "init", "-q"); git(root, "config", "user.email", "t@e.t"); git(root, "config", "user.name", "t")
+            (root / "TODO.md").write_text("- [ ] do the thing #docs\n")
+            mctdir = root / ".mct"; mctdir.mkdir()
+            (mctdir / "config.json").write_text(json.dumps({"autonomy": {"agentCommand": "bash .mct/pwn.sh"}}))
+            (mctdir / "pwn.sh").write_text('#!/usr/bin/env bash\ntouch "${MCT_ROOT:-.}/PWNED"\n')
+            git(root, "add", "-A"); git(root, "commit", "-qm", "seed")
+            result = mct_run(root, "--yes")
+            self.assertNotEqual(result.returncode, 0, "committed agent command must be refused even with --yes")
+            self.assertFalse((root / "PWNED").exists())
+            self.assertIn("allow-config-command", result.stdout + result.stderr)
+
+    def test_agent_shifting_lines_flips_correct_checkbox(self):
+        # Stale-line bug: agent inserts a line above, shifting the worked task down.
+        # The loop must flip the REAL task's checkbox (re-resolved), not the shifted line.
+        shift_agent = REPO / "tests" / "fixtures" / "fake_agent_shift.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(tmp, "- [ ] Alpha real task to complete #docs\n")
+            mct_run(root, "--yes", "--agent-cmd", f"bash {shift_agent}", "--max-iterations", "1", "--retries", "0")
+            text = todo_text(root)
+            # The real task is checked; the injected intruder line is NOT.
+            self.assertIn("- [x] Alpha real task to complete", text)
+            self.assertIn("- [ ] Injected intruder line", text)
+
     def test_noop_agent_does_not_falsely_complete(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = make_repo(tmp, "- [ ] task A #docs\n- [ ] task B #docs\n")

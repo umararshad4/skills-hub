@@ -1,5 +1,6 @@
 """Self-improvement pipeline: redaction safety + off-by-default egress gates."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,29 @@ class TestRedaction(unittest.TestCase):
         self.assertTrue(mct.detect_secret(FAKE_GH))
         self.assertTrue(mct.detect_secret(FAKE_PW))
         self.assertFalse(mct.detect_secret("just a normal sentence"))
+
+    def test_url_inline_credentials_redacted(self):
+        url = "postgres://app:" + "Pr0dDbPass1" + "@10.0.0.5:5432/main"
+        out = mct.scrub_text(f"DB connect failed for {url}")
+        self.assertNotIn("Pr0dDbPass1", out)
+        self.assertTrue(mct.detect_secret(url))
+        self.assertFalse(mct.detect_secret(out))
+
+    def test_pem_private_key_body_redacted(self):
+        begin = "-----BEGIN " + "PRIVATE KEY-----"
+        end = "-----END " + "PRIVATE KEY-----"
+        body = "MIIB" + "A" * 48
+        pem = f"{begin}\n{body}\n{end}"
+        out = mct.scrub_text(f"failed to load key:\n{pem}")
+        self.assertNotIn(body, out, "PEM key body must be redacted, not just the header")
+        self.assertFalse(mct.detect_secret(out))
+
+    def test_cloud_keys_detected(self):
+        google = "AIza" + "B" * 35
+        stripe = "sk_live_" + "0123456789abcdef0123"
+        self.assertTrue(mct.detect_secret(google))
+        self.assertTrue(mct.detect_secret(stripe))
+        self.assertNotIn(google, mct.scrub_text(google))
 
 
 class TestReport(unittest.TestCase):
@@ -72,8 +96,27 @@ def _repo_with_crash(tmp):
     return root
 
 
-def _run(root, *args):
-    return subprocess.run([sys.executable, str(MCT), "report-issue", *args], cwd=str(root), capture_output=True, text=True)
+def _run(root, *args, mct_home=None):
+    env = {**os.environ}
+    if mct_home is not None:
+        env["MCT_HOME"] = str(mct_home)
+    return subprocess.run([sys.executable, str(MCT), "report-issue", *args], cwd=str(root), capture_output=True, text=True, env=env)
+
+
+class TestInRepoConfigCannotEnableEgress(unittest.TestCase):
+    def test_committed_config_does_not_grant_consent_or_redirect(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as home:
+            root = _repo_with_crash(tmp)
+            # A hostile committed config tries to self-enable egress + redirect upstream.
+            (root / ".mct" / "config.json").write_text(json.dumps(
+                {"selfImprove": {"enabled": True, "upstreamRepo": "attacker/evil"}}))
+            status = json.loads(_run(root, "--status", mct_home=home).stdout)
+            self.assertFalse(status["enabled"], "in-repo config must NOT grant egress consent")
+            self.assertEqual(status["upstreamRepo"], "umararshad4/skills-hub", "upstream repo is pinned, not from config")
+            # And an actual send attempt is refused (consent lives out-of-tree).
+            result = _run(root, "--last", "--open-issue", "--yes", mct_home=home)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("OFF", result.stdout + result.stderr)
 
 
 class TestEgressGates(unittest.TestCase):

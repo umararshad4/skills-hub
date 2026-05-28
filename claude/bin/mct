@@ -602,17 +602,24 @@ def is_security_task(task: TodoTask) -> bool:
     return any(signal in lower or signal in task.tags for signal in ("auth", "security", "payment", "permission", "webhook"))
 
 
-def task_required_checks(task: TodoTask, root: Path) -> list[str]:
+UI_EXTENSIONS = (".tsx", ".jsx", ".css", ".scss", ".sass", ".mdx")
+
+
+def task_required_checks(task: TodoTask, root: Path, changed_files: list[str] | None = None) -> list[str]:
+    # Consider the agent's REAL changed files (when known), not just the static
+    # `files:` annotation — so an unannotated .ts/.tsx edit can't escape the gate.
+    extra = [f.lower() for f in (changed_files or [])]
     required = []
-    if is_ui_task(task):
+    if is_ui_task(task) or any(f.endswith(UI_EXTENSIONS) or "/components/" in f or "/app/" in f for f in extra):
         required.append("browser-proof")
-    if is_react_task(task) and is_react_project(root):
+    if (is_react_task(task) or any(f.endswith((".tsx", ".jsx")) for f in extra)) and is_react_project(root):
         required.append("react-doctor")
     if is_api_task(task):
         required.append("api-behavior-check")
     if is_security_task(task):
         required.append("negative-path-check")
-    if any(file.endswith((".ts", ".tsx")) for file in task.files) and package_has_script(root, "typecheck"):
+    ts_touched = any(f.endswith((".ts", ".tsx")) for f in [*[x.lower() for x in task.files], *extra])
+    if ts_touched and package_has_script(root, "typecheck"):
         required.append("typecheck")
     return list(dict.fromkeys(required))
 
@@ -706,13 +713,14 @@ def unmet_required_checks(
     skipped: list[str] | None,
     executed: list[dict] | None = None,
     artifact_ok: bool = False,
+    changed_files: list[str] | None = None,
 ) -> list[str]:
     provided = [parse_check_token(item) for item in (checks or [])]
     skips = [parse_skip_token(item) for item in (skipped or [])]
     executed = executed or []
     return [
         required
-        for required in task_required_checks(task, root)
+        for required in task_required_checks(task, root, changed_files)
         if not requirement_satisfied(required, provided, skips, executed, artifact_ok)
     ]
 
@@ -1472,6 +1480,7 @@ def complete_task(
     all_: bool = False,
     message: str | None = None,
     allow_no_commit: bool = False,
+    changed_files: list[str] | None = None,
 ) -> dict:
     """The single verified completion gate, shared by `mct done` and `mct run`.
 
@@ -1489,7 +1498,7 @@ def complete_task(
         else:
             artifact_reason = shape_reason
 
-    unmet = unmet_required_checks(task, root, checks, skipped, executed_results, artifact_ok)
+    unmet = unmet_required_checks(task, root, checks, skipped, executed_results, artifact_ok, changed_files)
     if unmet:
         raise CompletionBlocked(unmet_checks_message(unmet, artifact_reason))
 
@@ -1506,24 +1515,34 @@ def complete_task(
         "stagedFiles": git_files(root, staged=True),
     }
 
+    # Re-resolve the task's CURRENT line from a fresh parse — the agent may have
+    # shifted TODO.md, so the line captured before dispatch can be stale. Refuse
+    # rather than flip a possibly-wrong (unrelated) checkbox.
+    def current_line() -> int:
+        _, fresh = parse_todo(root, load_policy())
+        matches = [t for t in fresh if t.id == task.id and not t.done]
+        if len(matches) != 1:
+            raise CompletionBlocked(
+                "could not uniquely re-locate this task's line in TODO.md (it moved, was edited, "
+                "or is duplicated); refusing to flip a possibly-wrong checkbox"
+            )
+        return matches[0].line
+
+    rel_todo = str(todo_path.relative_to(root)) if todo_path.is_relative_to(root) else todo_path.name
     commit_result = None
     commit_payload = None
     if commit:
-        # Flip the checkbox FIRST and stage it, so the [x] is committed atomically
-        # with the task (no off-by-one, no done-but-uncommitted final task). Revert
-        # the flip if the commit cannot be made.
+        line = current_line() if not task.done else task.line
         if not task.done:
-            update_todo_checkbox(todo_path, task.line, checked=True)
-        rel_todo = str(todo_path.relative_to(root)) if todo_path.is_relative_to(root) else todo_path.name
-        if all_:
-            stage_for_commit(root, ([*task.files, rel_todo] if task.files else None))
-        else:
-            stage_for_commit(root, [rel_todo])  # add the flip to any pre-staged work
-        # Never autonomously commit a secret.
+            update_todo_checkbox(todo_path, line, checked=True)
+        # Stage ONLY the agent's delta (task.files + real changed files + TODO) —
+        # never `git add -A`, which would sweep unrelated/stray edits into the commit.
+        scoped = [*task.files, *(changed_files or []), rel_todo]
+        stage_for_commit(root, scoped if (all_ and scoped) else [rel_todo] if not all_ else None)
         found, secret_reason = has_secret_in_staged(root)
         if found:
             if not task.done:
-                update_todo_checkbox(todo_path, task.line, checked=False)
+                update_todo_checkbox(todo_path, line, checked=False)
             raise CompletionBlocked(f"refusing to commit a likely secret: {secret_reason}")
         subject = message or commit_subject(task, summary)
         body = commit_body(task, checks or [], skipped or [], None)
@@ -1532,13 +1551,13 @@ def complete_task(
             commit_payload = {"commit": {"sha": commit_result.get("sha"), "subject": commit_result.get("subject")}}
         elif not allow_no_commit:
             if not task.done:
-                update_todo_checkbox(todo_path, task.line, checked=False)
+                update_todo_checkbox(todo_path, line, checked=False)
             raise CompletionBlocked(
                 "commit failed; TODO left unchanged: "
                 + (commit_result.get("reason") or commit_result.get("stderr") or "unknown error")
             )
     elif not task.done:
-        update_todo_checkbox(todo_path, task.line, checked=True)
+        update_todo_checkbox(todo_path, current_line(), checked=True)
 
     if commit_payload:
         receipt.update(commit_payload)
@@ -1675,9 +1694,17 @@ def rollback_attempt(root: Path) -> bool:
     return proc.returncode == 0
 
 
-def run_required_checks(root: Path, task: TodoTask) -> list[dict]:
+def porcelain_path(line: str) -> str:
+    """Extract the file path from a `git status --porcelain` line (handles renames)."""
+    s = line[3:] if len(line) > 3 else line
+    if " -> " in s:
+        s = s.split(" -> ", 1)[1]
+    return s.strip().strip('"')
+
+
+def run_required_checks(root: Path, task: TodoTask, changed_files: list[str] | None = None) -> list[dict]:
     """Execute the deterministically-runnable required checks for a task."""
-    return [run_named_check(root, name) for name in task_required_checks(task, root) if name in AUTO_EXECUTABLE_CHECKS]
+    return [run_named_check(root, name) for name in task_required_checks(task, root, changed_files) if name in AUTO_EXECUTABLE_CHECKS]
 
 
 def mark_blocked(root: Path, todo_path: Path, task: TodoTask, reason: str) -> None:
@@ -1738,10 +1765,11 @@ def command_run(args: argparse.Namespace) -> int:
     if not confirmed:
         print(json.dumps({"refused": "mct run mutates the repo unattended; re-run with --yes", "next": plan["next"]}, indent=2))
         return 2
-    if cmd_from_config:
-        logger.warning(
-            "agent command came from the repo's committed .mct/config.json (%r); proceeding only "
-            "because --yes was given explicitly. Review it before trusting an untrusted repo.", agent_cmd,
+    if cmd_from_config and not (getattr(args, "allow_config_command", False) or os.environ.get("MCT_ALLOW_CONFIG_COMMAND") == "1"):
+        raise SystemExit(
+            "the agent command came from the repo's committed .mct/config.json. Executing a command "
+            "named by a (possibly cloned/untrusted) repo is refused even with --yes. Pass --agent-cmd "
+            "explicitly, or re-run with --allow-config-command if you trust this repo's committed command."
         )
     # Keep .mct/ untracked so the rollback stash (--include-untracked) never swallows
     # MCT's own bookkeeping. Commit the .gitignore if that is the only resulting change.
@@ -1802,17 +1830,21 @@ def command_run(args: argparse.Namespace) -> int:
             att = {"attempt": attempt, "dispatch": dispatch}
             if not dispatch.get("ok"):
                 att["result"] = "agent-failed"; entry["attempts"].append(att); rollback_attempt(root); failures += 1; continue
-            if not (set(working_tree_changes(root)) - before):
+            delta = set(working_tree_changes(root)) - before
+            if not delta:
                 # No change attributable to THIS agent run — never count leftover
                 # state as work, so an unedited task cannot be falsely completed.
                 att["result"] = "agent-noop"; entry["attempts"].append(att); failures += 1; continue
-            executed = run_required_checks(root, task)
+            changed_files = [porcelain_path(line) for line in delta]
+            # Gate against the agent's REAL changed files, not just the static annotation.
+            executed = run_required_checks(root, task, changed_files)
             if any(r.get("executed") and r.get("result") != "pass" for r in executed):
                 att["result"] = "checks-failed"; entry["attempts"].append(att); rollback_attempt(root); failures += 1; continue
             try:
                 complete_task(
                     root, todo_path, task, checks=None, skipped=None, browser_evidence=None,
                     executed_results=executed, summary=f"mct run: {task.clean_text}", commit=True, all_=True,
+                    changed_files=changed_files,
                 )
                 att["result"] = "verified-done"; entry["attempts"].append(att); entry["outcome"] = "done"
                 terminal.add(task.id); break
@@ -1858,14 +1890,23 @@ def command_commit(args: argparse.Namespace) -> int:
 # Broadened secret detection — shared by the staged-diff scanner and the
 # self-improvement report redaction/tripwire.
 SECRET_PATTERNS = [
-    re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
+    # Whole PEM block FIRST (multiline) so the key body+footer are removed, not just the header.
+    re.compile(r"-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----"),
+    re.compile(r"-----BEGIN [^-]*PRIVATE KEY-----"),                  # header fallback
+    re.compile(r"(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,}"),           # OpenAI (token boundary; not mid-word like "task-...")
+    re.compile(r"(?<![A-Za-z0-9_])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}"),  # Stripe
     re.compile(r"AKIA[0-9A-Z]{16}"),                                  # AWS access key id
+    re.compile(r"(?i)aws.{0,20}(?:secret|key).{0,5}['\"=:\s]+[0-9A-Za-z/+]{40}"),  # AWS secret
     re.compile(r"gh[posru]_[A-Za-z0-9]{20,}"),                        # GitHub tokens
     re.compile(r"glpat-[A-Za-z0-9_-]{20,}"),                          # GitLab
     re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}"),                      # Slack
+    re.compile(r"AIza[0-9A-Za-z_-]{35}"),                             # Google API key
+    re.compile(r"GOCSPX-[0-9A-Za-z_-]{10,}"),                         # Google OAuth secret
     re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),  # JWT
-    re.compile(r"(?i)(api[_-]?key|secret|token|password|passwd|pwd)\s*[:=]\s*['\"][^'\"]{8,}['\"]"),
+    re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/-]{20,}"),               # Bearer token
+    re.compile(r"(?i)[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@"),       # URL with inline credentials
+    # Assignment (quote optional, short floor) — over-redaction is safe for a report.
+    re.compile(r"(?i)(api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key)\s*[:=]\s*['\"]?[^'\"\s]{4,}"),
 ]
 
 
@@ -1899,13 +1940,21 @@ def scrub_text(text: str) -> str:
     """Redact secrets and user/home paths from text destined for a report."""
     if not text:
         return text or ""
+    # Secrets first, so a redacted-out region can't expose a path/username.
+    for pattern in SECRET_PATTERNS:
+        text = pattern.sub("<redacted-secret>", text)
     home = str(Path.home())
     if home:
         text = text.replace(home, "~")
-    text = re.sub(r"/Users/[^/\s]+", "/Users/<user>", text)
-    text = re.sub(r"/home/[^/\s]+", "/home/<user>", text)
-    for pattern in SECRET_PATTERNS:
-        text = pattern.sub("<redacted-secret>", text)
+    text = re.sub(r"(?i)([A-Z]:\\Users\\)[^\\/\s]+", r"\1<user>", text)        # Windows
+    text = re.sub(r"/(Users|home|root)/[^/\s]+", r"/\1/<user>", text)          # POSIX
+    try:
+        import getpass
+        user = getpass.getuser()
+        if user and len(user) >= 3:
+            text = re.sub(rf"\b{re.escape(user)}\b", "<user>", text)
+    except Exception as exc:
+        logger.debug("could not derive username for redaction: %s", exc)
     return text[:MAX_REPORT_CHARS]
 
 
@@ -1970,17 +2019,33 @@ def gh_authed() -> bool:
     return proc.returncode == 0
 
 
+def self_improve_consent_path() -> Path:
+    # Stored OUT OF TREE (global) so a committed in-repo .mct/config.json can never
+    # grant outbound-reporting consent on a victim's machine.
+    return claude_root() / "selfimprove-consent.json"
+
+
+def self_improve_enabled() -> bool:
+    path = self_improve_consent_path()
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text())
+    except Exception as exc:
+        logger.debug("could not read self-improve consent: %s", exc)
+        return False
+    return isinstance(data, dict) and bool(data.get("enabled"))
+
+
 def write_self_improve_enabled(root: Path, enabled: bool) -> None:
-    config = load_config(root)
-    config.setdefault("selfImprove", {})["enabled"] = enabled
-    save_json_atomic(config_path(root), config)
+    save_json_atomic(self_improve_consent_path(), {"enabled": enabled, "at": now()})
 
 
 def command_report_issue(args: argparse.Namespace) -> int:
     root = find_root(Path.cwd())
-    config = load_config(root)
-    si = config.get("selfImprove", {})
-    repo = args.repo or si.get("upstreamRepo") or UPSTREAM_REPO
+    # Egress target is the PINNED constant — never sourced from in-repo config
+    # (anti-SSRF). An explicit caller --repo may override, but only if valid.
+    repo = args.repo or UPSTREAM_REPO
 
     if args.enable:
         if not args.confirm:
@@ -1990,7 +2055,7 @@ def command_report_issue(args: argparse.Namespace) -> int:
                 "`mct report-issue --enable --confirm` to consent."
             )
         write_self_improve_enabled(root, True)
-        print(json.dumps({"selfImprove": "enabled", "upstreamRepo": repo}, indent=2))
+        print(json.dumps({"selfImprove": "enabled", "consentFile": str(self_improve_consent_path())}, indent=2))
         return 0
     if args.disable:
         write_self_improve_enabled(root, False)
@@ -1998,8 +2063,9 @@ def command_report_issue(args: argparse.Namespace) -> int:
         return 0
     if args.status:
         print(json.dumps({
-            "enabled": bool(si.get("enabled")),
+            "enabled": self_improve_enabled(),
             "upstreamRepo": repo,
+            "consentFile": str(self_improve_consent_path()),
             "ghAuthenticated": gh_authed(),
             "latestCrash": str(latest_crash(root)) if latest_crash(root) else None,
         }, indent=2))
@@ -2023,7 +2089,7 @@ def command_report_issue(args: argparse.Namespace) -> int:
         return 0
 
     # ---- egress path: every gate must pass, fail-closed ----
-    if not si.get("enabled"):
+    if not self_improve_enabled():
         raise SystemExit("outbound reporting is OFF (default). Enable with `mct report-issue --enable --confirm`.")
     if os.environ.get("MCT_NO_NETWORK") == "1" or os.environ.get("MCT_AUTOREPORT") == "0":
         raise SystemExit("outbound reporting is hard-disabled by env (MCT_NO_NETWORK / MCT_AUTOREPORT=0).")
@@ -2747,6 +2813,7 @@ def main() -> int:
     run_cmd.add_argument("--max-seconds", type=int)
     run_cmd.add_argument("--retries", type=int)
     run_cmd.add_argument("--yes", action="store_true", help="Confirm unattended repo mutation")
+    run_cmd.add_argument("--allow-config-command", action="store_true", help="Permit an agent command sourced from the repo's committed .mct/config.json")
     run_cmd.add_argument("--dry-run", action="store_true", help="Print the plan without dispatching")
     run_cmd.add_argument("--stop", action="store_true", help="Write the kill-switch .mct/STOP")
     run_cmd.set_defaults(func=command_run)
