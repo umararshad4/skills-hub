@@ -75,6 +75,23 @@ and the "loop" lived only in advisory markdown; now it lives in code.
 - Broadened the secret scanner (AWS/GitHub/GitLab/Slack/JWT/`password=` in
   addition to `sk-`/PEM), shared by the staged-diff scan and report redaction.
 
+### Changed — outbound reporting REMOVED (local-only)
+- Automatic outbound issue reporting was removed after repeated adversarial review
+  showed regex redaction cannot safely scrub arbitrary crash data before publishing
+  to a public repo (URL credentials, PEM key bodies, and unknown token formats kept
+  slipping past the shared redactor/tripwire). `mct report-issue` now only captures
+  and prints redacted reports **locally**; nothing is ever sent. The `sk-` pattern
+  is token-anchored to stop false positives on words like "ta**sk-**…".
+
+### Fixed — third red-team round (loop now has no known criticals)
+- Scoped staging adds each path individually, so a stale/renamed `files:` entry can
+  no longer abort the commit and falsely block a task whose real work succeeded.
+- Security/API required checks now also key off the agent's real changed files, so
+  an auth/payment edit under a bland title is no longer auto-completed unverified.
+- `mct run` is labeled **experimental** with documented remaining sharp edges
+  (receipt-filename collisions under sub-second completion; a typecheck-script
+  deletion TOCTOU) — to be addressed before any unattended/untrusted use.
+
 ### Notes
 - `VERSION` → `3.0.0` (the marketed "no autonomous control loop" invariant is
   reversed).

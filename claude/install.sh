@@ -8,6 +8,10 @@ mkdir -p "${TARGET_DIR}"
 
 copy_dir() {
   local name="$1"
+  if [ ! -d "${ROOT_DIR}/${name}" ]; then
+    echo "MCT install: source dir '${name}' not present, skipping" >&2
+    return 0
+  fi
   mkdir -p "${TARGET_DIR}/${name}"
   # --delete keeps the sync clean, but --backup-dir preserves any user-authored
   # files it would otherwise remove/overwrite, so a reinstall never destroys a

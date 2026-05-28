@@ -614,9 +614,11 @@ def task_required_checks(task: TodoTask, root: Path, changed_files: list[str] | 
         required.append("browser-proof")
     if (is_react_task(task) or any(f.endswith((".tsx", ".jsx")) for f in extra)) and is_react_project(root):
         required.append("react-doctor")
-    if is_api_task(task):
+    sec_tokens = ("auth", "session", "login", "password", "payment", "billing", "webhook", "permission", "token", "secret", "credential")
+    api_tokens = ("/api/", "route", "endpoint", "handler", "controller", "/server/")
+    if is_api_task(task) or any(tok in f for f in extra for tok in api_tokens):
         required.append("api-behavior-check")
-    if is_security_task(task):
+    if is_security_task(task) or any(tok in f for f in extra for tok in sec_tokens):
         required.append("negative-path-check")
     ts_touched = any(f.endswith((".ts", ".tsx")) for f in [*[x.lower() for x in task.files], *extra])
     if ts_touched and package_has_script(root, "typecheck"):
@@ -1442,7 +1444,10 @@ def stage_for_commit(root: Path, paths: list[str] | None) -> None:
     """Stage paths (scoped to the task's files when known, else everything), then
     un-stage .mct/ bookkeeping so it never lands in a task commit."""
     if paths:
-        run(["git", "add", "--", *paths], root)
+        # Stage each path individually so one missing/renamed path can't abort the
+        # whole `git add` and silently stage nothing (which would falsely block a task).
+        for path in paths:
+            run(["git", "add", "--", path], root)
     else:
         run(["git", "add", "-A"], root)
     run(["git", "reset", "-q", "--", ".mct"], root)
@@ -2043,86 +2048,43 @@ def write_self_improve_enabled(root: Path, enabled: bool) -> None:
 
 def command_report_issue(args: argparse.Namespace) -> int:
     root = find_root(Path.cwd())
-    # Egress target is the PINNED constant — never sourced from in-repo config
-    # (anti-SSRF). An explicit caller --repo may override, but only if valid.
-    repo = args.repo or UPSTREAM_REPO
-
-    if args.enable:
-        if not args.confirm:
-            raise SystemExit(
-                "Enabling outbound reports will send REDACTED crash data to the upstream toolkit repo "
-                f"({repo}) when you run `mct report-issue --open-issue --yes`. Re-run with "
-                "`mct report-issue --enable --confirm` to consent."
-            )
-        write_self_improve_enabled(root, True)
-        print(json.dumps({"selfImprove": "enabled", "consentFile": str(self_improve_consent_path())}, indent=2))
-        return 0
-    if args.disable:
-        write_self_improve_enabled(root, False)
-        print(json.dumps({"selfImprove": "disabled"}, indent=2))
-        return 0
+    # LOCAL-ONLY by design. Automatic outbound egress was removed: repeated
+    # adversarial review showed regex redaction cannot safely scrub arbitrary
+    # crash data before publishing it to a PUBLIC repo (secrets in URLs, PEM key
+    # bodies, and unknown token formats kept slipping through). The toolkit
+    # captures its own bugs locally; a human reviews and shares them deliberately.
+    if args.enable or args.disable:
+        raise SystemExit(
+            "outbound issue reporting was removed (it could not safely auto-redact secrets before "
+            "publishing). Reports are local-only: view with `mct report-issue --last --print` and "
+            "open an issue yourself after reviewing the content."
+        )
     if args.status:
         print(json.dumps({
-            "enabled": self_improve_enabled(),
-            "upstreamRepo": repo,
-            "consentFile": str(self_improve_consent_path()),
-            "ghAuthenticated": gh_authed(),
+            "outboundReporting": "disabled (local-only by design)",
+            "crashesDir": str(crashes_dir(root)),
             "latestCrash": str(latest_crash(root)) if latest_crash(root) else None,
         }, indent=2))
         return 0
 
-    # Load the report to act on.
     if args.from_crash:
         report_path = Path(args.from_crash).expanduser()
     else:
         report_path = latest_crash(root)
     if not report_path or not report_path.exists():
-        raise SystemExit("no crash report found; nothing to report (use --from-crash PATH)")
+        raise SystemExit("no crash report found (use --from-crash PATH)")
     try:
         report = json.loads(report_path.read_text())
-    except Exception:
-        raise SystemExit(f"could not read crash report: {report_path}")
+    except Exception as exc:
+        raise SystemExit(f"could not read crash report: {report_path} ({exc})")
 
-    # Default and --print are local/no-egress.
-    if args.print or not args.open_issue:
-        print(json.dumps(report, indent=2))
-        return 0
-
-    # ---- egress path: every gate must pass, fail-closed ----
-    if not self_improve_enabled():
-        raise SystemExit("outbound reporting is OFF (default). Enable with `mct report-issue --enable --confirm`.")
-    if os.environ.get("MCT_NO_NETWORK") == "1" or os.environ.get("MCT_AUTOREPORT") == "0":
-        raise SystemExit("outbound reporting is hard-disabled by env (MCT_NO_NETWORK / MCT_AUTOREPORT=0).")
-    if not args.yes:
-        raise SystemExit(f"re-run with --yes to send a redacted issue to {repo}.")
-    if not REPO_RE.match(repo):
-        raise SystemExit(f"invalid repo (expected owner/name): {repo}")
-    if not gh_authed():
-        raise SystemExit("gh is not installed/authenticated — cannot open an issue (fails closed).")
-
-    title = f"[mct {report.get('mctVersion')}] {report.get('errorType')}: {str(report.get('message'))[:80]}"
-    body = "Auto-generated redacted MCT crash report.\n\n```json\n" + json.dumps(report, indent=2) + "\n```"
-    # Residual-secret tripwire on the FINAL payload — a redaction miss must never be sent.
-    if detect_secret(title) or detect_secret(body):
-        raise SystemExit("aborting send: residual secret detected in the report payload.")
-
-    # Dedup: skip if an open issue already carries this signature.
-    sig = report.get("signature", "")
-    search = subprocess.run(
-        ["gh", "issue", "list", "-R", repo, "--state", "open", "--search", sig, "--json", "number"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-    if search.returncode == 0 and search.stdout.strip() and search.stdout.strip() not in ("[]", ""):
-        print(json.dumps({"deduped": True, "signature": sig, "existing": search.stdout.strip()}, indent=2))
-        return 0
-
-    create = subprocess.run(
-        ["gh", "issue", "create", "-R", repo, "-t", title, "-b", body, "-l", "mct-auto-report"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-    if create.returncode != 0:
-        raise SystemExit(f"gh issue create failed: {create.stdout.strip()}")
-    print(json.dumps({"opened": True, "repo": repo, "url": create.stdout.strip()}, indent=2))
+    if args.open_issue:
+        print(
+            "Outbound reporting is disabled (local-only). Nothing was sent. Review the redacted "
+            "report below and, if it is safe to share, open an issue yourself.",
+            file=sys.stderr,
+        )
+    print(json.dumps(report, indent=2))
     return 0
 
 

@@ -103,50 +103,37 @@ def _run(root, *args, mct_home=None):
     return subprocess.run([sys.executable, str(MCT), "report-issue", *args], cwd=str(root), capture_output=True, text=True, env=env)
 
 
-class TestInRepoConfigCannotEnableEgress(unittest.TestCase):
-    def test_committed_config_does_not_grant_consent_or_redirect(self):
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as home:
-            root = _repo_with_crash(tmp)
-            # A hostile committed config tries to self-enable egress + redirect upstream.
-            (root / ".mct" / "config.json").write_text(json.dumps(
-                {"selfImprove": {"enabled": True, "upstreamRepo": "attacker/evil"}}))
-            status = json.loads(_run(root, "--status", mct_home=home).stdout)
-            self.assertFalse(status["enabled"], "in-repo config must NOT grant egress consent")
-            self.assertEqual(status["upstreamRepo"], "umararshad4/skills-hub", "upstream repo is pinned, not from config")
-            # And an actual send attempt is refused (consent lives out-of-tree).
-            result = _run(root, "--last", "--open-issue", "--yes", mct_home=home)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("OFF", result.stdout + result.stderr)
+class TestLocalOnly(unittest.TestCase):
+    """Outbound egress was removed; reporting is local-only and never sends."""
 
-
-class TestEgressGates(unittest.TestCase):
-    def test_open_issue_refused_when_disabled(self):
+    def test_status_is_local_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _repo_with_crash(tmp)
-            result = _run(root, "--last", "--open-issue", "--yes")
-            self.assertNotEqual(result.returncode, 0, "must refuse to send when reporting is OFF")
-            self.assertIn("OFF", result.stdout + result.stderr)
+            result = _run(root, "--status")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("local-only", result.stdout)
 
-    def test_print_does_not_egress(self):
+    def test_print_shows_report(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _repo_with_crash(tmp)
             result = _run(root, "--last", "--print")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)["signature"], "abc123")
 
-    def test_status_runs_offline(self):
+    def test_open_issue_does_not_send(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _repo_with_crash(tmp)
-            result = _run(root, "--status")
+            result = _run(root, "--last", "--open-issue")
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(json.loads(result.stdout)["enabled"])
+            self.assertIn("Nothing was sent", result.stderr)
+            self.assertEqual(json.loads(result.stdout)["signature"], "abc123")
 
-    def test_enable_requires_confirm(self):
+    def test_enable_is_refused_egress_removed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _repo_with_crash(tmp)
             result = _run(root, "--enable")
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("confirm", (result.stdout + result.stderr).lower())
+            self.assertIn("removed", (result.stdout + result.stderr).lower())
 
 
 if __name__ == "__main__":
