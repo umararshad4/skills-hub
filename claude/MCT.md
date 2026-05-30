@@ -242,6 +242,7 @@ Use the deterministic CLI when available:
 ~/.claude/bin/mct next --claim
 ~/.claude/bin/mct branch
 ~/.claude/bin/mct browser-proof --url "http://localhost:3000" --viewport "1440x900,390x844" --flow "changed screen inspected" --result pass
+~/.claude/bin/mct browser-check --command "npx playwright test" --url "http://localhost:3000" --viewport "1440x900"
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "..."
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "..." --commit --all
 ~/.claude/bin/mct todo-log --md
@@ -267,6 +268,10 @@ Project bootstrap:
 ```
 
 `--project` creates `.mct/state.json`, `.mct/config.json`, adds `.mct/` to `.gitignore`, creates a `TODO.md` template if missing, and installs Git hooks. `--ci` also installs a GitHub Actions workflow and vendored `mct` CLI copy under `.github/mct/`.
+
+MCT appends local automation events to `.mct/events.jsonl` for receipts, checks, browser proof,
+and `mct run` lifecycle events. This file is gitignored state for debugging, not committed project
+history.
 
 Toolkit update:
 
@@ -356,6 +361,18 @@ Use `mct browser-proof` to create reusable browser evidence:
 ```
 
 Pass the printed `browserEvidence` value to `mct done`.
+
+Use `mct browser-check` when MCT should execute the verification command and produce the proof:
+
+```bash
+~/.claude/bin/mct browser-check \
+  --command "npx playwright test tests/smoke.spec.ts --project=chromium" \
+  --url "http://localhost:3000" \
+  --viewport "1440x900,390x844" \
+  --flow "smoke flow passed"
+```
+
+It stores a proof artifact, records the command result, and emits a `browserEvidence` string.
 
 Use `mct final-check --todo-log` before final response. It runs the strict audit and prints the TODO trace. The audit flags:
 

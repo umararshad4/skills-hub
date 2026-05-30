@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 
 # Observability: warnings are surfaced on stderr (never stdout, which carries the
 # machine-readable JSON). Set MCT_DEBUG=1 for verbose/debug output.
@@ -213,6 +213,10 @@ def proof_dir(root: Path) -> Path:
     return root / ".mct" / "browser-proof"
 
 
+def event_log_path(root: Path) -> Path:
+    return root / ".mct" / "events.jsonl"
+
+
 def config_path(root: Path) -> Path:
     return root / ".mct" / "config.json"
 
@@ -248,6 +252,21 @@ def save_json_atomic(path: Path, data: dict) -> None:
     tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
     tmp.write_text(payload)
     os.replace(tmp, path)
+
+
+def append_event(root: Path, kind: str, payload: dict | None = None) -> Path:
+    """Append a durable local event for run/debug observability."""
+    path = event_log_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    event = {
+        "at": now(),
+        "version": VERSION,
+        "kind": kind,
+        "payload": payload or {},
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, sort_keys=True) + "\n")
+    return path
 
 
 def save_state(root: Path, state: dict) -> None:
@@ -605,7 +624,12 @@ def is_security_task(task: TodoTask) -> bool:
 UI_EXTENSIONS = (".tsx", ".jsx", ".css", ".scss", ".sass", ".mdx")
 
 
-def task_required_checks(task: TodoTask, root: Path, changed_files: list[str] | None = None) -> list[str]:
+def task_required_checks(
+    task: TodoTask,
+    root: Path,
+    changed_files: list[str] | None = None,
+    typecheck_available: bool | None = None,
+) -> list[str]:
     # Consider the agent's REAL changed files (when known), not just the static
     # `files:` annotation — so an unannotated .ts/.tsx edit can't escape the gate.
     extra = [f.lower() for f in (changed_files or [])]
@@ -621,7 +645,9 @@ def task_required_checks(task: TodoTask, root: Path, changed_files: list[str] | 
     if is_security_task(task) or any(tok in f for f in extra for tok in sec_tokens):
         required.append("negative-path-check")
     ts_touched = any(f.endswith((".ts", ".tsx")) for f in [*[x.lower() for x in task.files], *extra])
-    if ts_touched and package_has_script(root, "typecheck"):
+    if typecheck_available is None:
+        typecheck_available = package_has_script(root, "typecheck")
+    if ts_touched and typecheck_available:
         required.append("typecheck")
     return list(dict.fromkeys(required))
 
@@ -716,13 +742,14 @@ def unmet_required_checks(
     executed: list[dict] | None = None,
     artifact_ok: bool = False,
     changed_files: list[str] | None = None,
+    typecheck_available: bool | None = None,
 ) -> list[str]:
     provided = [parse_check_token(item) for item in (checks or [])]
     skips = [parse_skip_token(item) for item in (skipped or [])]
     executed = executed or []
     return [
         required
-        for required in task_required_checks(task, root, changed_files)
+        for required in task_required_checks(task, root, changed_files, typecheck_available)
         if not requirement_satisfied(required, provided, skips, executed, artifact_ok)
     ]
 
@@ -1301,8 +1328,12 @@ def command_config(args: argparse.Namespace) -> int:
 
 def append_receipt(root: Path, receipt: dict) -> Path:
     receipt_dir(root).mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     path = receipt_dir(root) / f"{stamp}.json"
+    counter = 1
+    while path.exists():
+        path = receipt_dir(root) / f"{stamp}-{counter}.json"
+        counter += 1
     path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     state = load_state(root)
     state.setdefault("runs", []).append({"at": receipt["at"], "receipt": str(path.relative_to(root)), "summary": receipt.get("summary", ""), "completedTasks": receipt.get("completedTasks", [])})
@@ -1316,6 +1347,14 @@ def append_receipt(root: Path, receipt: dict) -> Path:
             "risks": receipt.get("risks", []),
         })
     save_state(root, state)
+    append_event(root, "receipt.appended", {
+        "receipt": str(path.relative_to(root)),
+        "summary": receipt.get("summary", ""),
+        "completedTasks": receipt.get("completedTasks", []),
+        "checksRun": receipt.get("checksRun", []),
+        "checksSkipped": receipt.get("checksSkipped", []),
+        "risks": receipt.get("risks", []),
+    })
     return path
 
 
@@ -1368,8 +1407,7 @@ def command_receipt(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_browser_proof(args: argparse.Namespace) -> int:
-    root = find_root(Path.cwd())
+def create_browser_proof(root: Path, args: argparse.Namespace, command_result: dict | None = None) -> dict:
     if not (args.url or args.test or args.screenshot or args.command):
         raise SystemExit("browser-proof requires at least one target: --url, --test, --screenshot, or --command")
     if args.result.lower() not in {"pass", "passed", "ok", "success", "fail", "failed"}:
@@ -1404,6 +1442,7 @@ def command_browser_proof(args: argparse.Namespace) -> int:
         "assertion": args.assertion,
         "result": args.result,
         "screenshot": screenshot_meta,
+        "commandResult": command_result,
     }
     proof_dir(root).mkdir(parents=True, exist_ok=True)
     proof_id = hashlib.sha1(json.dumps(proof, sort_keys=True).encode()).hexdigest()[:12]
@@ -1426,6 +1465,65 @@ def command_browser_proof(args: argparse.Namespace) -> int:
         evidence += f" | screenshot={screenshot_meta['path']}"
     evidence += f" | proof={path.relative_to(root)} | result={args.result}"
     result = {"ok": args.result.lower() in {"pass", "passed", "ok", "success"}, "proof": str(path), "browserEvidence": evidence}
+    append_event(root, "browser.proof", {
+        "ok": result["ok"],
+        "proof": str(path.relative_to(root)),
+        "tool": args.tool,
+        "url": args.url,
+        "test": args.test,
+        "commandExitCode": (command_result or {}).get("exitCode"),
+    })
+    return result
+
+
+def command_browser_proof(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    result = create_browser_proof(root, args)
+    print(json.dumps(result, indent=2))
+    return 0 if result["ok"] else 1
+
+
+def command_browser_check(args: argparse.Namespace) -> int:
+    root = find_root(Path.cwd())
+    try:
+        argv = shlex.split(args.command)
+    except ValueError as exc:
+        raise SystemExit(f"could not parse --command: {exc}")
+    if not argv:
+        raise SystemExit("--command cannot be empty")
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=str(root),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=args.timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        command_result = {
+            "command": args.command,
+            "exitCode": None,
+            "timedOut": True,
+            "timeoutSeconds": args.timeout,
+            "stdoutTail": scrub_text((exc.stdout or "")[-1000:] if isinstance(exc.stdout, str) else ""),
+            "stderrTail": scrub_text((exc.stderr or "")[-1000:] if isinstance(exc.stderr, str) else ""),
+        }
+        args.result = "fail"
+        result = create_browser_proof(root, args, command_result)
+        result["commandResult"] = command_result
+        print(json.dumps(result, indent=2))
+        return 1
+    command_result = {
+        "command": args.command,
+        "exitCode": proc.returncode,
+        "timedOut": False,
+        "stdoutTail": scrub_text(proc.stdout[-1000:]),
+        "stderrTail": scrub_text(proc.stderr[-1000:]),
+    }
+    args.result = "pass" if proc.returncode == args.expect_exit_code else "fail"
+    result = create_browser_proof(root, args, command_result)
+    result["commandResult"] = command_result
     print(json.dumps(result, indent=2))
     return 0 if result["ok"] else 1
 
@@ -1459,6 +1557,14 @@ def command_run_check(args: argparse.Namespace) -> int:
     state = load_state(root)
     state.setdefault("checkHistory", []).extend(results)
     save_state(root, state)
+    for result in results:
+        append_event(root, "check.run", {
+            "name": result.get("name"),
+            "executed": result.get("executed"),
+            "result": result.get("result"),
+            "exitCode": result.get("exitCode"),
+            "reason": result.get("reason"),
+        })
     rc = 1 if any(r.get("executed") and r.get("result") != "pass" for r in results) else 0
     print(json.dumps({"results": results, "ok": rc == 0}, indent=2))
     return rc
@@ -1486,6 +1592,7 @@ def complete_task(
     message: str | None = None,
     allow_no_commit: bool = False,
     changed_files: list[str] | None = None,
+    typecheck_available: bool | None = None,
 ) -> dict:
     """The single verified completion gate, shared by `mct done` and `mct run`.
 
@@ -1503,7 +1610,9 @@ def complete_task(
         else:
             artifact_reason = shape_reason
 
-    unmet = unmet_required_checks(task, root, checks, skipped, executed_results, artifact_ok, changed_files)
+    unmet = unmet_required_checks(
+        task, root, checks, skipped, executed_results, artifact_ok, changed_files, typecheck_available
+    )
     if unmet:
         raise CompletionBlocked(unmet_checks_message(unmet, artifact_reason))
 
@@ -1645,7 +1754,7 @@ def head_sha(root: Path) -> str:
 
 
 def working_tree_changes(root: Path) -> list[str]:
-    proc = run(["git", "status", "--porcelain"], root)
+    proc = run(["git", "status", "--porcelain", "--untracked-files=all"], root)
     if proc.returncode != 0:
         return []
     return [line for line in proc.stdout.splitlines() if line.strip() and ".mct/" not in line]
@@ -1707,9 +1816,18 @@ def porcelain_path(line: str) -> str:
     return s.strip().strip('"')
 
 
-def run_required_checks(root: Path, task: TodoTask, changed_files: list[str] | None = None) -> list[dict]:
+def run_required_checks(
+    root: Path,
+    task: TodoTask,
+    changed_files: list[str] | None = None,
+    typecheck_available: bool | None = None,
+) -> list[dict]:
     """Execute the deterministically-runnable required checks for a task."""
-    return [run_named_check(root, name) for name in task_required_checks(task, root, changed_files) if name in AUTO_EXECUTABLE_CHECKS]
+    return [
+        run_named_check(root, name)
+        for name in task_required_checks(task, root, changed_files, typecheck_available)
+        if name in AUTO_EXECUTABLE_CHECKS
+    ]
 
 
 def mark_blocked(root: Path, todo_path: Path, task: TodoTask, reason: str) -> None:
@@ -1801,6 +1919,11 @@ def command_run(args: argparse.Namespace) -> int:
     record = {"runId": run_id, "startedAt": now(), "agentCommand": agent_cmd, "limits": limits, "tasks": [], "stopReason": None}
     iterations = failures = 0
     terminal: set[str] = set()
+    append_event(root, "run.started", {
+        "runId": run_id,
+        "agentCommandSha1": hashlib.sha1(agent_cmd.encode()).hexdigest(),
+        "limits": limits,
+    })
 
     def persist():
         save_json_atomic(runs_dir(root) / f"{run_id}.json", record)
@@ -1831,6 +1954,7 @@ def command_run(args: argparse.Namespace) -> int:
 
         for attempt in range(1, int(limits["retries"]) + 2):
             before = set(working_tree_changes(root))  # baseline so we measure the AGENT'S delta
+            baseline_typecheck = package_has_script(root, "typecheck")
             dispatch = dispatch_agent(root, agent_cmd, task, run_id, attempt, int(limits["perTaskTimeout"]))
             att = {"attempt": attempt, "dispatch": dispatch}
             if not dispatch.get("ok"):
@@ -1842,14 +1966,14 @@ def command_run(args: argparse.Namespace) -> int:
                 att["result"] = "agent-noop"; entry["attempts"].append(att); failures += 1; continue
             changed_files = [porcelain_path(line) for line in delta]
             # Gate against the agent's REAL changed files, not just the static annotation.
-            executed = run_required_checks(root, task, changed_files)
+            executed = run_required_checks(root, task, changed_files, baseline_typecheck)
             if any(r.get("executed") and r.get("result") != "pass" for r in executed):
                 att["result"] = "checks-failed"; entry["attempts"].append(att); rollback_attempt(root); failures += 1; continue
             try:
                 complete_task(
                     root, todo_path, task, checks=None, skipped=None, browser_evidence=None,
                     executed_results=executed, summary=f"mct run: {task.clean_text}", commit=True, all_=True,
-                    changed_files=changed_files,
+                    changed_files=changed_files, typecheck_available=baseline_typecheck,
                 )
                 att["result"] = "verified-done"; entry["attempts"].append(att); entry["outcome"] = "done"
                 terminal.add(task.id); break
@@ -1874,6 +1998,13 @@ def command_run(args: argparse.Namespace) -> int:
         "done": len(done), "blocked": len(blocked),
         "runState": str(runs_dir(root) / f"{run_id}.json"),
     }, indent=2))
+    append_event(root, "run.finished", {
+        "runId": run_id,
+        "stopReason": record["stopReason"],
+        "done": len(done),
+        "blocked": len(blocked),
+        "runState": str(runs_dir(root) / f"{run_id}.json"),
+    })
     return 0 if not blocked else 1
 
 
@@ -2582,13 +2713,26 @@ def command_doctor(args: argparse.Namespace) -> int:
         )
         git_hooks[name] = {"installed": installed, "mctWired": wired}
     enforced = bool(git_hooks) and all(hook["mctWired"] for hook in git_hooks.values())
+    events_path = event_log_path(root)
+    event_count = 0
+    if events_path.exists():
+        try:
+            event_count = sum(1 for line in events_path.read_text(errors="ignore").splitlines() if line.strip())
+        except Exception as exc:
+            logger.debug("could not count event log lines: %s", exc)
     report = {
         "root": str(root),
         "isGitRepo": (root / ".git").exists(),
         "mctBin": str(mct_bin),
         "mctBinExecutable": mct_bin.exists(),
+        "mctVersion": VERSION,
         "gitHooks": git_hooks,
         "enforcedPathActive": enforced,
+        "eventLog": {
+            "path": str(events_path),
+            "exists": events_path.exists(),
+            "events": event_count,
+        },
         "hint": (
             "Git hooks are wired; commits/pushes run mct verify."
             if enforced
@@ -2691,6 +2835,19 @@ def main() -> int:
     browser_proof.add_argument("--assertion", default="")
     browser_proof.add_argument("--result", default="pass")
     browser_proof.set_defaults(func=command_browser_proof)
+
+    browser_check = sub.add_parser("browser-check", help="Run a browser/UI check command, store proof, and emit browserEvidence")
+    browser_check.add_argument("--tool", default="browser-command")
+    browser_check.add_argument("--command", required=True, help="Command to execute without a shell; quote it as one argument")
+    browser_check.add_argument("--url")
+    browser_check.add_argument("--test")
+    browser_check.add_argument("--screenshot")
+    browser_check.add_argument("--viewport", default="")
+    browser_check.add_argument("--flow", default="")
+    browser_check.add_argument("--assertion", default="")
+    browser_check.add_argument("--timeout", type=int, default=300)
+    browser_check.add_argument("--expect-exit-code", type=int, default=0)
+    browser_check.set_defaults(func=command_browser_check)
 
     todo_log = sub.add_parser("todo-log")
     todo_log.add_argument("--md", action="store_true")

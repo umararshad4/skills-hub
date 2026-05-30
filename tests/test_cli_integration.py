@@ -92,5 +92,29 @@ class TestFinalCheckStrict(unittest.TestCase):
             self.assertNotIn("unrecognized arguments", result.stderr)
 
 
+class TestBrowserCheck(unittest.TestCase):
+    def test_browser_check_executes_command_and_emits_usable_proof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(tmp, "- [ ] inspect browser flow #ui\n")
+            result = mct_run(
+                root,
+                "browser-check",
+                "--command",
+                f"{sys.executable} -c \"print('browser ok')\"",
+                "--url",
+                "http://localhost:3000",
+                "--viewport",
+                "1440x900",
+                "--flow",
+                "smoke flow",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            out = json.loads(result.stdout)
+            self.assertTrue(out["ok"])
+            self.assertIn("proof=", out["browserEvidence"])
+            done = mct_run(root, "done", "browser", "--browser-evidence", out["browserEvidence"])
+            self.assertEqual(done.returncode, 0, done.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

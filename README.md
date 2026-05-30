@@ -20,11 +20,13 @@ guidance an agent chooses to follow. Be clear-eyed about which is which:
   returns a non-zero exit code on failure. The git hooks **fail closed** when the binary is missing
   (set `MCT_ALLOW_MISSING=1` to bypass intentionally). Run `mct doctor` to see if they are wired.
 - `mct audit --strict` exits non-zero on any high-severity issue; CI runs the full
-  `scripts/check.sh` gate (unit tests + red-team probes + strict audit).
+  `scripts/check.sh` gate (unit tests + red-team probes + strict audit + security smoke).
 - The dangerous-command guard blocks destructive shell commands (recursive-force deletes of
   absolute/home/root paths, `mkfs`, `dd` to a device, `find / -delete`, fork bombs, destructive
   `git`, …) by parsing the actual command, not substring-matching text.
 - State writes are atomic; `mct next --claim` records and respects task claims.
+- Receipts, checks, browser proof, and autonomous runs append local JSONL events to
+  `.mct/events.jsonl`, so failed or partial automation has a durable debugging trace.
 
 - `mct run` (**experimental**) is a real, in-code autonomous control loop: it drains the TODO
   queue, dispatches a pluggable work command, verifies through the same gate as `mct done`, commits,
@@ -32,9 +34,11 @@ guidance an agent chooses to follow. Be clear-eyed about which is which:
   (`--max-iterations`, `--max-failures`, `--max-seconds`, `.mct/STOP`). It is opt-in (`--yes` + a
   configured agent command, clean tree required; a committed agent command needs
   `--allow-config-command`) and **cannot mark a task done without satisfying its required checks**.
-  It survived multiple adversarial red-team rounds (no known criticals) but has known sharp edges
-  (audit-receipt collisions under sub-second completion; a typecheck-script-deletion TOCTOU) — use
-  with review, not unattended on untrusted input.
+  It survived multiple adversarial red-team rounds (no known criticals) and hardens against stale
+  TODO line shifts, degenerate browser artifacts, receipt-name collisions, committed-config command
+  execution, no-op agents, secret commits, and typecheck-script deletion during a run. It is still
+  experimental because it depends on an external work command and should be used with review, not
+  unattended on untrusted input.
 - `mct report-issue` captures toolkit crashes **locally** (redacted) for you to review. Automatic
   outbound reporting was removed: regex redaction could not safely scrub arbitrary crash data before
   publishing to a public repo, so nothing is ever sent — you share a reviewed report yourself.
@@ -158,6 +162,7 @@ With GitHub Actions CI:
 ~/.claude/bin/mct final-check --todo-log
 ~/.claude/bin/mct next --claim
 ~/.claude/bin/mct browser-proof --url "http://localhost:3000" --viewport "1440x900,390x844" --flow "changed screen inspected" --result pass
+~/.claude/bin/mct browser-check --command "npx playwright test" --url "http://localhost:3000" --viewport "1440x900"
 ~/.claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ~/.claude/bin/mct done "<ui-task>" --check "playwright-browser-check" --browser-evidence "tool=playwright-mcp | url=http://localhost:3000 | viewport=1440x900,390x844 | result=pass" --commit --all
 ~/.claude/bin/mct todo-log --md
@@ -176,6 +181,7 @@ Repo-local form for non-Claude agents:
 ./claude/bin/mct final-check --todo-log
 ./claude/bin/mct next --claim
 ./claude/bin/mct browser-proof --url "http://localhost:3000" --viewport "1440x900,390x844" --flow "changed screen inspected" --result pass
+./claude/bin/mct browser-check --command "npx playwright test" --url "http://localhost:3000" --viewport "1440x900"
 ./claude/bin/mct done "<task-id-or-slug>" --check "<check-name>" --commit --all
 ./claude/bin/mct done "<ui-task>" --check "playwright-browser-check" --browser-evidence "tool=playwright-mcp | url=http://localhost:3000 | viewport=1440x900,390x844 | result=pass" --commit --all
 ./claude/bin/mct todo-log --md
@@ -200,6 +206,18 @@ UI/browser TODOs are strict. A check name alone is not enough. `mct done` requir
 The strict audit also checks the chain from TODO to receipt to commit. A checked TODO without a receipt is flagged, and a completed TODO receipt without a commit SHA is flagged when TODO commits are required. Use `mct todo-log --md` to inspect task -> checks -> browser proof -> receipt -> commit.
 
 `mct browser-proof` creates a local proof artifact under `.mct/browser-proof/` and prints a `browserEvidence` string you can pass to `mct done`.
+
+When you want MCT to execute the verification command instead of only recording an existing proof,
+use `mct browser-check`. It runs a command, stores a local proof artifact, and prints a
+`browserEvidence` string accepted by `mct done`:
+
+```bash
+~/.claude/bin/mct browser-check \
+  --command "npx playwright test tests/pricing.spec.ts --project=chromium" \
+  --url "http://localhost:3000/pricing" \
+  --viewport "1440x900,390x844" \
+  --flow "pricing toggle and CTA visible"
+```
 
 ## opensrc Workflow
 

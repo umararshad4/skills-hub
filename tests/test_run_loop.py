@@ -165,6 +165,28 @@ class TestRedTeamFixes(unittest.TestCase):
             log = subprocess.run(["git", "-C", str(root), "log", "-p"], capture_output=True, text=True).stdout
             self.assertNotIn("sk-AAAA", log)
 
+    def test_deleting_typecheck_script_cannot_drop_required_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(tmp, "- [ ] update shared logic #docs\n")
+            (root / "package.json").write_text(json.dumps({"scripts": {"typecheck": "true"}}))
+            git(root, "add", "-A")
+            git(root, "commit", "-qm", "add package")
+            agent = root / "agent.sh"
+            agent.write_text(
+                "#!/usr/bin/env bash\n"
+                "mkdir -p src\n"
+                "printf 'export const value = 1\\n' > src/value.ts\n"
+                "printf '{\"scripts\":{}}\\n' > package.json\n"
+            )
+            agent.chmod(0o755)
+            git(root, "add", "-A")
+            git(root, "commit", "-qm", "add agent")
+            result = mct_run(root, "--yes", "--agent-cmd", f"bash {agent}", "--max-iterations", "2", "--retries", "0")
+            out = json.loads(result.stdout)
+            self.assertEqual(out["done"], 0, "removing typecheck must not let a TS edit complete unchecked")
+            self.assertEqual(out["blocked"], 1)
+            self.assertNotIn("- [x]", todo_text(root))
+
     def test_each_task_commit_is_atomic_and_tree_clean(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = make_repo(tmp, "- [ ] note one #docs\n- [ ] note two #docs\n")

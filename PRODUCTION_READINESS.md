@@ -123,7 +123,8 @@ checked AND `bash scripts/check.sh` exits 0, with the full output pasted as proo
 
 ## Known limitations (record here instead of faking anything)
 
-- (Out of scope by design) No autonomous control loop / multi-agent dispatch — this is Target A.
+- (Out of scope by design) No autonomous multi-agent dispatch — `mct run` is a bounded sequential
+  control loop around an external work command, not a self-authoring agent.
 - _Add any criterion that proves genuinely infeasible, with the reason._
 
 ---
@@ -141,3 +142,5 @@ _The loop appends a one-line note per iteration: which AC advanced and the verif
 - AC7: malformed/empty TODO lines warn instead of silently dropping; dependency resolver matches unambiguous bare tokens so mutual deps form cycle-detectable edges. 92 tests green.
 - AC9: added 'What Is Enforced vs Advisory' to README (+ pointers in AGENTS.md/MCT.md); CHANGELOG maintained; VERSION 2.0.0.
 - Post-audit hardening: guard recurses into bash -c/sh -c/eval; final-check --strict fixed; browser-proof rejects tiny images; install.sh backs up global config. 99 tests green.
+- Autonomous toolkit hardening: added executable `browser-check`, JSONL event log, unique receipt
+  filenames, typecheck-script deletion protection during `mct run`, and security smoke checks.

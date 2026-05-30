@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from mctmod import mct
+
 REPO = Path(__file__).resolve().parents[1]
 MCT = REPO / "claude" / "bin" / "mct"
 
@@ -45,6 +47,26 @@ class TestCorruptStateWarns(unittest.TestCase):
                 cwd=str(root), capture_output=True, text=True, env=env,
             )
             self.assertIn("could not parse .mct/state.json", result.stderr)
+
+
+class TestEventLog(unittest.TestCase):
+    def test_append_event_writes_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = mct.append_event(root, "unit.test", {"ok": True})
+            self.assertTrue(path.exists())
+            line = path.read_text().strip()
+            self.assertIn('"kind": "unit.test"', line)
+
+    def test_append_receipt_uses_unique_names_and_logs_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            receipt = {"at": mct.now(), "summary": "first", "completedTasks": [], "checksRun": [], "checksSkipped": [], "browserEvidence": [], "risks": []}
+            first = mct.append_receipt(root, dict(receipt))
+            second = mct.append_receipt(root, {**receipt, "summary": "second"})
+            self.assertNotEqual(first.name, second.name)
+            events = (root / ".mct" / "events.jsonl").read_text()
+            self.assertEqual(events.count('"kind": "receipt.appended"'), 2)
 
 
 if __name__ == "__main__":

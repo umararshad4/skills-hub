@@ -2,6 +2,27 @@
 
 All notable changes to the MCT toolkit are documented here.
 
+## [3.2.0] - 2026-05-30
+
+Autonomous-toolkit hardening release.
+
+- Added **`mct browser-check`**: MCT now executes a browser/UI verification
+  command, stores a local proof artifact, records the command result, and emits
+  a `browserEvidence` string usable by `mct done`.
+- Added a local append-only event stream at `.mct/events.jsonl` for receipts,
+  checks, browser proof, and `mct run` lifecycle events.
+- Fixed receipt filename collisions by switching receipt files to microsecond
+  precision with collision fallback.
+- Fixed the typecheck-script deletion TOCTOU in `mct run`: if typecheck existed
+  before the agent touched the repo, a TypeScript edit still requires typecheck
+  even if the agent deletes the script before verification.
+- Added `scripts/security-check.sh` and wired it into `scripts/check.sh` for
+  Python syntax, local-only reporting, destructive-command guard smoke, and
+  GitHub Actions pinning visibility.
+- Pinned repository and vendored-template GitHub Actions to current stable major
+  SHAs instead of mutable tags.
+- `mct doctor` now reports toolkit version and event-log status.
+
 ## [3.1.0] - 2026-05-29
 
 Hardening and safety release on top of the 3.0.0 autonomy work.
